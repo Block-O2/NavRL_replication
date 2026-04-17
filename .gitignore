@@ -109,3 +109,54 @@ isaac-training/training/scripts/outputs/
 isaac-training/third_party/warp/_build/
 
 isaac-training/outputs/
+
+# model checkpoints / weights
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# bulk training artifacts
+checkpoints/
+ckpts/
+models/
+media/
+videos/
+
+# logs / outputs
+wandb/
+outputs/
+logs/
+
+# caches
+isaac-training/nv_shadercache/
+**/nv_shadercache/
+__pycache__/
+*.pyc
+
+# temp / backups
+*.bak
+*.tmp
+*~
+
+# model files
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# outputs / logs
+wandb/
+outputs/
+logs/
+media/
+videos/
+quick-demos/eval_outputs/
+
+# local env / IDE
+.vscode/
+.idea/
+.DS_Store
+
+*.bak
+*.bak_*

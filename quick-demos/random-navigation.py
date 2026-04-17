@@ -5,9 +5,14 @@ from matplotlib import animation
 from utils import get_robot_state, get_ray_cast
 import torch
 import random
+import argparse
 from matplotlib.patches import Wedge
 from env import generate_obstacles_grid, sample_free_start, sample_free_goal
 from agent import Agent
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--checkpoint", default=None, help="Policy checkpoint path. Defaults to ckpts/navrl_checkpoint.pt.")
+args = parser.parse_args()
 
 # === Set random seed ===
 SEED = 0 
@@ -46,7 +51,7 @@ target_dir = goal - robot_pos
 trajectory = []
 
 # === NavRL Agent ===
-agent = Agent(device=device)
+agent = Agent(device=device, checkpoint=args.checkpoint)
 
 
 # === Visualization setup ===

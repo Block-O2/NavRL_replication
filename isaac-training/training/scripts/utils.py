@@ -202,6 +202,8 @@ def evaluate(
         for k, v in traj_stats.items()
     }
 
+    print(f"[EVAL-STATS-RAW] {info}", flush=True)
+
     # log video
     info["recording"] = wandb.Video(
         render_callback.get_video_array(axes="t c h w"), 

@@ -7,8 +7,9 @@ from ppo import PPO
 
 
 class Agent:
-    def __init__(self, device):
+    def __init__(self, device, checkpoint=None):
         self.device = device
+        self.checkpoint = checkpoint or os.environ.get("NAVRL_CHECKPOINT")
         self.policy = self.init_model()
 
     # PPO policy loader
@@ -36,9 +37,12 @@ class Agent:
         policy = PPO(observation_spec, action_spec, self.device)
 
         file_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ckpts")
-        checkpoint = "navrl_checkpoint.pt"
+        checkpoint = self.checkpoint or "navrl_checkpoint.pt"
+        if not os.path.isabs(checkpoint):
+            checkpoint = os.path.join(file_dir, checkpoint)
 
-        policy.load_state_dict(torch.load(os.path.join(file_dir, checkpoint), map_location=self.device))
+        print("Loading checkpoint:", checkpoint)
+        policy.load_state_dict(torch.load(checkpoint, map_location=self.device))
         return policy
     
     def plan(self, robot_state, static_obs_input, dyn_obs_input, target_dir):

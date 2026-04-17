@@ -4,10 +4,15 @@ from matplotlib.patches import Circle
 from matplotlib import animation
 import torch
 import random
+import argparse
 from env import generate_obstacles_grid
 from utils import get_robot_state, get_ray_cast, get_dyn_obs_state
 from agent import Agent
 from matplotlib import cm
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--checkpoint", default=None, help="Policy checkpoint path. Defaults to ckpts/navrl_checkpoint.pt.")
+args = parser.parse_args()
 
 
 # === Set random seed ===
@@ -47,7 +52,7 @@ target_dirs = [goals[i] - robot_positions[i] for i in range(len(goals))]
 trajectories = [[p.copy()] for p in robot_positions]
 
 # === NavRL Agent ===
-agent = Agent(device=device)
+agent = Agent(device=device, checkpoint=args.checkpoint)
 
 # === Visualization setup ===
 fig, ax = plt.subplots(figsize=(10, 10))
