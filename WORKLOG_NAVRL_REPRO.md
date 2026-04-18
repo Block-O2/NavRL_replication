@@ -2779,6 +2779,144 @@ dynstopfinal: reached=3, collision=1, timeout=1
 - 若继续 ROS2 文本路线：增加多 seed、多障碍和轨迹图。
 - 若继续复现主线：优先尝试真实/合成 depth 或 pointcloud 输入，让 `dynamic_detector_node` 和 `occupancy_map_node` 不再只是空图/stub。
 
+## 2026-04-18 ROS2 合成传感器输入预检
+
+目的：
+
+- 继续减少对纯服务 stub 的依赖。
+- 验证作者 `occupancy_map_node` 和 `dynamic_detector_node` 在有合成 sensor topics 输入时能稳定运行。
+- 这一步不是完整 perception 复现，只是确认真实输入链路入口可用：
+  - depth image；
+  - pointcloud；
+  - pose；
+  - color image；
+  - YOLO detection topic。
+
+新增工具：
+
+```text
+ros2/tools/synthetic_sensor_publisher.py
+```
+
+发布内容：
+
+- 给 `map_manager` 参数文件对应 topic：
+  - `/unitree_go2/front_cam/depth_image`
+  - `/unitree_go2/lidar/point_cloud`
+  - `/unitree_go2/pose`
+- 给 `onboard_detector` 参数文件对应 topic：
+  - `/camera/depth/image_rect_raw`
+  - `/camera/color/image_raw`
+  - `/mavros/local_position/pose`
+  - `yolo_detector/detected_bounding_boxes`
+
+语法检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+/home/ubuntu/miniconda3/envs/NavRL/bin/python -m py_compile \
+  ros2/tools/synthetic_sensor_publisher.py
+```
+
+结果：通过。
+
+运行方式：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+export ROS_DOMAIN_ID=190
+
+ros2 run map_manager occupancy_map_node --ros-args \
+  --params-file /home/ubuntu/projects/NavRL/ros2/map_manager/cfg/map_param.yaml
+
+ros2 run onboard_detector dynamic_detector_node --ros-args \
+  --params-file /home/ubuntu/projects/NavRL/ros2/onboard_detector/cfg/dynamic_detector_param.yaml
+
+/home/ubuntu/miniconda3/envs/NavRL/bin/python \
+  /home/ubuntu/projects/NavRL/ros2/tools/synthetic_sensor_publisher.py \
+  --duration 5 \
+  --rate 10
+```
+
+服务检查：
+
+```bash
+ros2 service list | grep -E "occupancy_map/raycast|onboard_detector/get_dynamic_obstacles"
+```
+
+结果：
+
+```text
+/occupancy_map/raycast
+/onboard_detector/get_dynamic_obstacles
+```
+
+raycast 调用：
+
+```bash
+ros2 service call /occupancy_map/raycast map_manager/srv/RayCast \
+"{position: {x: 0.0, y: 0.0, z: 1.0}, start_angle: 0.0, range: 5.0, vfov_min: -10.0, vfov_max: 10.0, vbeams: 3, hres: 90.0, visualize: false}"
+```
+
+结果节选：
+
+```text
+points=[
+  4.924..., 0.0, 0.131...,
+  2.1, 0.0, 1.0,
+  2.166..., 0.0, 1.382...,
+  ...
+]
+```
+
+解释：
+
+- 返回中出现 `x≈2.1` 的命中点，说明 `occupancy_map_node` 确实吃到了合成 pointcloud/depth，并影响 raycast。
+- 这比空地图 raycast 更接近真实 map 输入链路。
+
+dynamic obstacle 服务调用：
+
+```bash
+ros2 service call /onboard_detector/get_dynamic_obstacles onboard_detector/srv/GetDynamicObstacles \
+"{current_position: {x: 0.0, y: 0.0, z: 1.0}, range: 5.0}"
+```
+
+结果：
+
+```text
+position=[]
+velocity=[]
+size=[]
+```
+
+解释：
+
+- 服务可调用，节点未崩。
+- 返回空动态障碍是当前合成输入下的合理结果：
+  - YOLO detections 为空；
+  - 没有构造连续运动目标；
+  - dynamic detector 需要 detection/tracking/classification 历史才能产出动态障碍。
+
+日志检查：
+
+```text
+Traceback|ERROR|Exception|failed|Aborted|Segmentation: 未命中
+```
+
+注意：
+
+- `grep inf` 会误命中 `inflate`，不是数值 `inf`。
+- 当前只证明 map/detector 的传感器 topic 入口能跑，不证明动态检测算法已经复现。
+
+下一步：
+
+1. 给 synthetic publisher 增加非空 `Detection2DArray`，测试 YOLO detection 路径是否能进入 detector history。
+2. 或者发布连续移动的 depth patch / pointcloud，检查 dynamic detector 是否能从历史中形成动态障碍。
+3. 将 synthetic sensor 输入接入 `navigation_node.py`，把 `occupancy_map_node` 从空图/手工 stub 推向真实 raycast 输入。
+
 ## 2026-04-18 Policy 备份到 GitHub
 
 目的：
