@@ -25,6 +25,15 @@ env_dyn:
   vel_range: [0.5, 1.5]
   local_range: [5.0, 5.0, 4.5]
 
+reward:
+  # Defaults preserve the current author-like training objective.
+  collision_penalty: 0.0
+  success_reward: 0.0
+  terminate_on_reach_goal: false
+  dynamic_stop_penalty: 0.0
+  dynamic_stop_distance: 1.0
+  dynamic_stop_speed: 0.2
+
 viewer:
   eye: [0., 40., 40.]
   lookat: [0., 2.5, 0.]

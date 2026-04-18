@@ -74,6 +74,29 @@ class NavigationEnv(IsaacEnv):
             # self.target_pos[:, 0, 1] = 24.
             # self.target_pos[:, 0, 2] = 2.     
 
+        reward_cfg = self.cfg.get("reward", {})
+        self.reward_collision_penalty = float(reward_cfg.get("collision_penalty", 0.0))
+        self.reward_success_reward = float(reward_cfg.get("success_reward", 0.0))
+        self.reward_terminate_on_reach_goal = bool(reward_cfg.get("terminate_on_reach_goal", False))
+        self.reward_dynamic_stop_penalty = float(reward_cfg.get("dynamic_stop_penalty", 0.0))
+        self.reward_dynamic_stop_distance = float(reward_cfg.get("dynamic_stop_distance", 1.0))
+        self.reward_dynamic_stop_speed = float(reward_cfg.get("dynamic_stop_speed", 0.2))
+        if any([
+            self.reward_collision_penalty,
+            self.reward_success_reward,
+            self.reward_terminate_on_reach_goal,
+            self.reward_dynamic_stop_penalty,
+        ]):
+            print(
+                "[Reward Ablation] "
+                f"collision_penalty={self.reward_collision_penalty}, "
+                f"success_reward={self.reward_success_reward}, "
+                f"terminate_on_reach_goal={self.reward_terminate_on_reach_goal}, "
+                f"dynamic_stop_penalty={self.reward_dynamic_stop_penalty}, "
+                f"dynamic_stop_distance={self.reward_dynamic_stop_distance}, "
+                f"dynamic_stop_speed={self.reward_dynamic_stop_speed}"
+            )
+
 
     def _design_scene(self):
         # Initialize a drone in prim /World/envs/envs_0
@@ -534,6 +557,7 @@ class NavigationEnv(IsaacEnv):
         else:
             dyn_obs_states = torch.zeros(self.num_envs, 1, self.cfg.algo.feature_extractor.dyn_obs_num, 10, device=self.cfg.device)
             dynamic_collision = torch.zeros(self.num_envs, 1, dtype=torch.bool, device=self.cfg.device)
+            closest_dyn_obs_distance_2d_collsion = torch.full((self.num_envs, 1), float("inf"), device=self.cfg.device)
             
         # -----------------Network Input Final--------------
         obs = {
@@ -577,13 +601,26 @@ class NavigationEnv(IsaacEnv):
             self.reward = reward_vel + 1. + reward_safety_static * 1.0 - penalty_smooth * 0.1 - penalty_height * 8.0
 
         # Terminal reward
-        # self.reward[collision] -= 50. # collision
+        if self.reward_collision_penalty != 0.:
+            self.reward[collision] -= self.reward_collision_penalty
 
         # Terminate Conditions
         reach_goal = (distance.squeeze(-1) < 0.5)
+        if self.reward_success_reward != 0.:
+            self.reward[reach_goal] += self.reward_success_reward
+        if self.reward_dynamic_stop_penalty != 0.:
+            speed_2d = self.drone.vel_w[..., :2].norm(dim=-1)
+            dynamic_stop = (
+                (closest_dyn_obs_distance_2d_collsion.min(dim=1).values < self.reward_dynamic_stop_distance)
+                & (speed_2d < self.reward_dynamic_stop_speed)
+            )
+            self.reward[dynamic_stop] -= self.reward_dynamic_stop_penalty
+
         below_bound = self.drone.pos[..., 2] < 0.2
         above_bound = self.drone.pos[..., 2] > 4.
         self.terminated = below_bound | above_bound | collision
+        if self.reward_terminate_on_reach_goal:
+            self.terminated = self.terminated | reach_goal
         self.truncated = (self.progress_buf >= self.max_episode_length).unsqueeze(-1) # progress buf is to track the step number
 
         # update previous velocity for smoothness calculation in the next ieteration

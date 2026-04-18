@@ -13,6 +13,8 @@ AUTHOR="$ROOT_DIR/quick-demos/ckpts/navrl_checkpoint.pt"
 OWN1000="$ROOT_DIR/isaac-training/runs/navrl_1024_50m_20260417_policy_retry1/ckpts/checkpoint_1000.pt"
 OWN1500="$ROOT_DIR/isaac-training/runs/navrl_1024_50m_20260417_policy_retry1/ckpts/checkpoint_1500.pt"
 OWNFINAL="$ROOT_DIR/isaac-training/runs/navrl_1024_50m_20260417_policy_retry1/ckpts/checkpoint_final.pt"
+DYNSTOP150="$ROOT_DIR/isaac-training/runs/navrl_1024_ablate_dynstop_5m_20260418/ckpts/checkpoint_150.pt"
+DYNSTOPFINAL="$ROOT_DIR/isaac-training/runs/navrl_1024_ablate_dynstop_5m_20260418/ckpts/checkpoint_final.pt"
 
 run_eval() {
   local title="$1"
@@ -35,6 +37,28 @@ COMMON_POLICIES=(
   --policy "ownfinal=$OWNFINAL"
 )
 
+if [[ -f "$DYNSTOP150" ]]; then
+  COMMON_POLICIES+=(--policy "dynstop150=$DYNSTOP150")
+fi
+
+if [[ -f "$DYNSTOPFINAL" ]]; then
+  COMMON_POLICIES+=(--policy "dynstopfinal=$DYNSTOPFINAL")
+fi
+
+SAFE_POLICIES=(
+  --policy "author=$AUTHOR"
+  --policy "own1500=$OWN1500"
+  --policy "ownfinal=$OWNFINAL"
+)
+
+if [[ -f "$DYNSTOP150" ]]; then
+  SAFE_POLICIES+=(--policy "dynstop150=$DYNSTOP150")
+fi
+
+if [[ -f "$DYNSTOPFINAL" ]]; then
+  SAFE_POLICIES+=(--policy "dynstopfinal=$DYNSTOPFINAL")
+fi
+
 run_eval "ROS2-style mixed, no safe_action" \
   "$PYTHON_BIN" "$ROOT_DIR/quick-demos/policy_ros2_style_compare.py" \
   --seeds 20 \
@@ -48,9 +72,7 @@ run_eval "ROS2-style mixed, safe_action approximation" \
   --seeds 10 \
   --frames 300 \
   --device cpu \
-  --policy "author=$AUTHOR" \
-  --policy "own1500=$OWN1500" \
-  --policy "ownfinal=$OWNFINAL"
+  "${SAFE_POLICIES[@]}"
 
 run_eval "ROS2-style dynamic path-crossing, no safe_action" \
   "$PYTHON_BIN" "$ROOT_DIR/quick-demos/policy_ros2_style_compare.py" \
@@ -61,10 +83,7 @@ run_eval "ROS2-style dynamic path-crossing, no safe_action" \
   --dynamic-count 5 \
   --dynamic-layout path-crossing \
   --route corridor \
-  --policy "author=$AUTHOR" \
-  --policy "own1000=$OWN1000" \
-  --policy "own1500=$OWN1500" \
-  --policy "ownfinal=$OWNFINAL"
+  "${COMMON_POLICIES[@]}"
 
 run_eval "ROS2-style dynamic path-crossing, safe_action approximation" \
   "$PYTHON_BIN" "$ROOT_DIR/quick-demos/policy_ros2_style_compare.py" \
@@ -76,9 +95,7 @@ run_eval "ROS2-style dynamic path-crossing, safe_action approximation" \
   --dynamic-count 5 \
   --dynamic-layout path-crossing \
   --route corridor \
-  --policy "author=$AUTHOR" \
-  --policy "own1500=$OWN1500" \
-  --policy "ownfinal=$OWNFINAL"
+  "${SAFE_POLICIES[@]}"
 
 echo
 echo "[NavRL repro eval] done: $OUT_FILE"
