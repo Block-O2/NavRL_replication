@@ -2320,6 +2320,134 @@ Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate
 2. 用 6 到 9 个受控动态障碍输入形成小表。
 3. 再决定是否需要把 debug topic 保留为复现辅助，或只作为本地调试 patch。
 
+## 2026-04-18 ROS2 动态障碍 stub 扫描脚本
+
+目的：
+
+- 把前面手工执行的 ROS2 动态障碍对比变成可复跑脚本。
+- 每个 case 自动启动：
+  - `occupancy_map_node`
+  - `safe_action_node`
+  - `dynamic_obstacle_stub.py`
+  - `navigation_node.py`
+- 自动发布固定 odom / goal。
+- 自动订阅：
+  - `/navigation_runner/debug/raw_cmd_vel_world`
+  - `/navigation_runner/debug/safe_cmd_vel_world`
+  - `/unitree_go2/cmd_vel`
+- 输出 CSV，方便后续继续扩展 case。
+
+新增脚本：
+
+```text
+ros2/tools/run_policy_stub_scan.py
+```
+
+语法检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+/home/ubuntu/miniconda3/envs/NavRL/bin/python -m py_compile \
+  ros2/tools/dynamic_obstacle_stub.py \
+  ros2/tools/run_policy_stub_scan.py \
+  ros2/navigation_runner/scripts/navigation.py
+```
+
+结果：通过。
+
+运行命令：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+
+/home/ubuntu/miniconda3/envs/NavRL/bin/python \
+  /home/ubuntu/projects/NavRL/ros2/tools/run_policy_stub_scan.py \
+  --output /home/ubuntu/projects/NavRL/ros2/tools/policy_stub_scan_20260418.csv \
+  --domain-start 80
+```
+
+输出：
+
+```text
+ros2/tools/policy_stub_scan_20260418.csv
+```
+
+扫描配置：
+
+- checkpoints：
+  - `author`
+  - `own1500`
+  - `dynstopfinal`
+- odom：
+  - `(0.0, 0.0, 1.0)`, yaw = 0
+- goal：
+  - `(5.0, 0.0, 1.0)`
+- dynamic obstacle size：
+  - `(0.8, 0.8, 1.0)`
+- cases：
+  - `front_static`: `(2.0, 0.0, 1.0)`, velocity `(0.0, 0.0, 0.0)`
+  - `front_oncoming`: `(2.0, 0.0, 1.0)`, velocity `(-1.0, 0.0, 0.0)`
+  - `cross_yneg_to_path`: `(2.0, -1.0, 1.0)`, velocity `(0.0, 1.0, 0.0)`
+  - `cross_ypos_to_path`: `(2.0, 1.0, 1.0)`, velocity `(0.0, -1.0, 0.0)`
+  - `side_static_ypos`: `(2.0, 1.0, 1.0)`, velocity `(0.0, 0.0, 0.0)`
+
+结果表：
+
+| case | policy | raw x | raw y | raw z | cmd x | cmd y | speed_xy |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| front_static | author | 0.528 | 0.137 | 0.467 | 0.528 | 0.137 | 0.545 |
+| front_static | own1500 | 0.100 | 0.091 | 0.353 | 0.100 | 0.091 | 0.135 |
+| front_static | dynstopfinal | 0.107 | 0.286 | -0.033 | 0.107 | 0.286 | 0.305 |
+| front_oncoming | author | -0.036 | 0.488 | 0.465 | -0.036 | 0.488 | 0.489 |
+| front_oncoming | own1500 | -0.314 | -0.310 | 0.107 | -0.314 | -0.310 | 0.441 |
+| front_oncoming | dynstopfinal | -0.007 | 0.010 | -0.001 | -0.007 | 0.010 | 0.012 |
+| cross_yneg_to_path | author | -0.643 | 0.707 | 0.329 | -0.643 | 0.707 | 0.955 |
+| cross_yneg_to_path | own1500 | 0.283 | 0.532 | 0.246 | 0.283 | 0.532 | 0.603 |
+| cross_yneg_to_path | dynstopfinal | 0.429 | 0.582 | -0.048 | 0.429 | 0.582 | 0.723 |
+| cross_ypos_to_path | author | -0.559 | 0.581 | 0.599 | -0.559 | 0.581 | 0.807 |
+| cross_ypos_to_path | own1500 | -0.163 | -0.083 | 0.607 | -0.163 | -0.083 | 0.183 |
+| cross_ypos_to_path | dynstopfinal | -0.015 | 0.019 | 0.006 | -0.015 | 0.019 | 0.024 |
+| side_static_ypos | author | 0.948 | -0.870 | 0.581 | 0.948 | -0.870 | 1.287 |
+| side_static_ypos | own1500 | 0.189 | -0.720 | 0.741 | 0.189 | -0.720 | 0.744 |
+| side_static_ypos | dynstopfinal | 0.555 | -0.603 | 0.148 | 0.555 | -0.603 | 0.820 |
+
+日志检查：
+
+```text
+Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate
+```
+
+结果：未命中。
+
+观察：
+
+- 在这 15 个节点层测试里，`safe_action_node` 没有改变 x/y。
+- `safe_action_node` 主要把部分 checkpoint 的 z 速度压到 0。
+- 最终 `/unitree_go2/cmd_vel` 因 `height_control=False` 也会把 z 方向置 0。
+- 因此这些 case 的平面动作差异主要来自 policy raw action，而不是 safe_action 后处理。
+
+初步解释：
+
+- `dynstopfinal` 在 `front_static` 中比 `own1500` 给出更明显横向绕让。
+- `dynstopfinal` 在 `front_oncoming` 和 `cross_ypos_to_path` 中几乎停住，说明它对某些直接威胁输入非常保守。
+- 作者 checkpoint 在两个横穿 case 中给出明显后退 + 横向避让，说明作者 policy 在这些 ROS2 编码输入下并不弱；之前 quick-demo 中作者表现差，更可能是简化 evaluator 与真实 ROS2 输入分布不一致。
+- `own1500` 和 `dynstopfinal` 在 `cross_yneg_to_path` 中保持前进并横向避让；这不一定坏，但需要连续轨迹验证，单步 action 不能直接等价为成功。
+
+边界：
+
+- 这是单步 ROS2 节点层 action probe，不是闭环轨迹评估。
+- dynamic obstacle 是 stub，不是真实 depth/color detector 输出。
+- 这个结果主要用于检查输入编码和 policy 行为趋势，不能直接宣称复现成功。
+
+下一步：
+
+1. 如果继续做 ROS2 节点层验证，应把单步 probe 扩展为短 horizon rollout：把上一帧 `cmd_vel` 积分成下一帧 odom，再重复调用节点。
+2. 或者回到 Isaac eval，尝试绕过 GPU reset bug 后做文本化 eval。
+3. 在真实 ROS2/机器人前，必须保留作者 checkpoint 作为部署参考，不应只依赖自训练 policy。
+
 ## 2026-04-18 Policy 备份到 GitHub
 
 目的：

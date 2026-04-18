@@ -67,6 +67,11 @@ class Navigation(Node):
         self.get_logger().info(f"[navRunner]: Command topic name: {cmd_topic}.")
         self.action_pub = self.create_publisher(Twist, cmd_topic, 10)
         self.goal_vis_pub = self.create_publisher(MarkerArray, 'navigation_runner/goal', 10)
+        self.declare_parameter('debug_action_topics', False)
+        self.debug_action_topics = self.get_parameter('debug_action_topics').get_parameter_value().bool_value
+        if self.debug_action_topics:
+            self.raw_action_pub = self.create_publisher(Vector3, 'navigation_runner/debug/raw_cmd_vel_world', 10)
+            self.safe_action_pub = self.create_publisher(Vector3, 'navigation_runner/debug/safe_cmd_vel_world', 10)
 
         # Service client
         raycast_client_group = MutuallyExclusiveCallbackGroup()
@@ -405,6 +410,9 @@ class Navigation(Node):
         safe_cmd_vel_world = self.get_safe_action(vel_world, cmd_vel_world)
         # safe_cmd_vel_world[2] = 0
         self.safe_cmd_vel_world = safe_cmd_vel_world.copy()
+        if self.debug_action_topics:
+            self.raw_action_pub.publish(Vector3(x=float(cmd_vel_world[0]), y=float(cmd_vel_world[1]), z=float(cmd_vel_world[2])))
+            self.safe_action_pub.publish(Vector3(x=float(safe_cmd_vel_world[0]), y=float(safe_cmd_vel_world[1]), z=float(safe_cmd_vel_world[2])))
         quat_no_tilt = self.euler_to_quaternion(0, 0, curr_angle)
         quat_msg = Quaternion()
         quat_msg.w = quat_no_tilt[0]
