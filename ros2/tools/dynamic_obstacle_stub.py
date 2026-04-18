@@ -2,6 +2,7 @@
 """Minimal ROS2 service stub for controlled NavRL dynamic-obstacle tests."""
 
 import argparse
+import time
 
 import rclpy
 from geometry_msgs.msg import Vector3
@@ -14,6 +15,7 @@ class DynamicObstacleStub(Node):
     def __init__(self, args):
         super().__init__("dynamic_obstacle_stub")
         self.args = args
+        self.start_time = time.monotonic()
         self.service = self.create_service(
             GetDynamicObstacles,
             "/onboard_detector/get_dynamic_obstacles",
@@ -28,7 +30,14 @@ class DynamicObstacleStub(Node):
 
     def handle_request(self, request, response):
         del request
-        response.position.append(Vector3(x=self.args.x, y=self.args.y, z=self.args.z))
+        elapsed = time.monotonic() - self.start_time if self.args.integrate_velocity else 0.0
+        response.position.append(
+            Vector3(
+                x=self.args.x + self.args.vx * elapsed,
+                y=self.args.y + self.args.vy * elapsed,
+                z=self.args.z + self.args.vz * elapsed,
+            )
+        )
         response.velocity.append(Vector3(x=self.args.vx, y=self.args.vy, z=self.args.vz))
         response.size.append(Vector3(x=self.args.sx, y=self.args.sy, z=self.args.sz))
         return response
@@ -45,6 +54,7 @@ def parse_args():
     parser.add_argument("--sx", type=float, default=0.6)
     parser.add_argument("--sy", type=float, default=0.6)
     parser.add_argument("--sz", type=float, default=1.0)
+    parser.add_argument("--integrate-velocity", action="store_true")
     return parser.parse_args()
 
 

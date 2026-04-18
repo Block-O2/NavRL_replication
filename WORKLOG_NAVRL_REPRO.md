@@ -2448,6 +2448,141 @@ Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate
 2. 或者回到 Isaac eval，尝试绕过 GPU reset bug 后做文本化 eval。
 3. 在真实 ROS2/机器人前，必须保留作者 checkpoint 作为部署参考，不应只依赖自训练 policy。
 
+## 2026-04-18 ROS2 短 horizon stub rollout
+
+目的：
+
+- 单步 action probe 只能看一帧动作。
+- 为了更接近闭环行为，新增短 horizon rollout：
+  - 用 ROS2 `navigation_node.py` 输出 `/unitree_go2/cmd_vel`；
+  - 将 `cmd_vel` 积分成下一帧 odom；
+  - 持续发布 odom 和 goal；
+  - dynamic obstacle stub 根据速度随时间移动。
+- 这仍是简化文本闭环，不是真实机器人/仿真动力学。
+
+新增/调整：
+
+```text
+ros2/tools/run_policy_stub_rollout.py
+ros2/tools/dynamic_obstacle_stub.py
+```
+
+`dynamic_obstacle_stub.py` 新增：
+
+```text
+--integrate-velocity
+```
+
+开启后，stub 返回的障碍位置会按 `pos0 + velocity * elapsed_time` 移动。
+
+语法检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+/home/ubuntu/miniconda3/envs/NavRL/bin/python -m py_compile \
+  ros2/tools/dynamic_obstacle_stub.py \
+  ros2/tools/run_policy_stub_rollout.py \
+  ros2/tools/run_policy_stub_scan.py \
+  ros2/navigation_runner/scripts/navigation.py
+```
+
+结果：通过。
+
+运行命令：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+
+/home/ubuntu/miniconda3/envs/NavRL/bin/python \
+  /home/ubuntu/projects/NavRL/ros2/tools/run_policy_stub_rollout.py \
+  --output /home/ubuntu/projects/NavRL/ros2/tools/policy_stub_rollout_20260418.csv \
+  --domain-start 130 \
+  --steps 60 \
+  --dt 0.1
+```
+
+输出：
+
+```text
+ros2/tools/policy_stub_rollout_20260418.csv
+```
+
+检查：
+
+```text
+rows=360
+blank_cmd_rows=0
+Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate: 未命中
+```
+
+配置：
+
+- checkpoints：
+  - `author`
+  - `own1500`
+  - `dynstopfinal`
+- agent 初始位置：
+  - `(0.0, 0.0, 1.0)`
+- goal：
+  - `(5.0, 0.0, 1.0)`
+- rollout：
+  - `dt=0.1`
+  - `steps=60`
+  - 约 6 秒
+- cases：
+  - `front_oncoming`: obstacle `(2.0, 0.0, 1.0)`, velocity `(-1.0, 0.0, 0.0)`
+  - `cross_yneg_to_path`: obstacle `(2.0, -1.0, 1.0)`, velocity `(0.0, 1.0, 0.0)`
+
+结果表：
+
+| case | policy | final x | final y | goal dist | min obs dist |
+| --- | --- | ---: | ---: | ---: | ---: |
+| cross_yneg_to_path | author | 4.128 | 0.422 | 0.969 | 0.527 |
+| cross_yneg_to_path | dynstopfinal | 4.062 | 0.105 | 0.944 | 0.916 |
+| cross_yneg_to_path | own1500 | 4.022 | 0.053 | 0.980 | 0.929 |
+| front_oncoming | author | 4.182 | 0.407 | 0.914 | 0.176 |
+| front_oncoming | dynstopfinal | 4.015 | 0.144 | 0.996 | 0.076 |
+| front_oncoming | own1500 | 4.019 | 0.061 | 0.983 | 0.059 |
+
+观察：
+
+- 在 `front_oncoming` 中，三者都接近目标，但最小障碍距离都很小：
+  - `author`: `0.176`
+  - `own1500`: `0.059`
+  - `dynstopfinal`: `0.076`
+- 在这个简化闭环里，`front_oncoming` 不能证明任何一个 policy 足够安全。
+- 在 `cross_yneg_to_path` 中：
+  - `author` 最小障碍距离 `0.527`
+  - `own1500` 最小障碍距离 `0.929`
+  - `dynstopfinal` 最小障碍距离 `0.916`
+- 这个横穿场景里，自训练两个 checkpoint 在简化闭环中保留了更大障碍距离。
+
+重要解释：
+
+- 这是非常简化的文本闭环：
+  - 没有真实动力学；
+  - 没有控制延迟；
+  - 没有真实地图更新；
+  - 没有真实 detector；
+  - 没有机器人尺寸碰撞判定；
+  - 只是把 `/cmd_vel` 积分为下一帧 odom。
+- 因此它只能作为 ROS2 节点输入/输出链路和 policy 行为趋势证据，不能当作最终复现实验。
+- 但它比单步 action probe 更进一步，因为它至少让 odom 随 policy 输出滚动变化。
+
+下一步判断：
+
+- 如果继续 ROS2 文本闭环，应加入：
+  - 机器人半径；
+  - 障碍半径；
+  - collision 判定；
+  - reach 判定；
+  - 多 seed / 多 obstacle case；
+  - 轨迹 CSV 汇总脚本。
+- 如果想更接近论文复现，下一阶段应回到 Isaac eval 或真实仿真，而不是无限扩展文本 stub。
+
 ## 2026-04-18 Policy 备份到 GitHub
 
 目的：
