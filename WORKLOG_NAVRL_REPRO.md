@@ -35,8 +35,9 @@
 - `[done]` 收敛到 policy 复现主线：确认候选 policy、固定评估命令、输出可解释结果。
 - `[done]` 用固定 evaluator 做干净复跑，并把表格作为当前复现结论。
 - `[done]` 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
+- `[done]` 新增干净 Isaac eval-only 入口，并完成一次小规模 CPU eval 验证。
 - `[next]` 评估是否需要继续训练；如果继续，应基于 `dynstopfinal` 或同类 reward 设计，而不是原始 reward 盲目加长。
-- `[next]` 研究如何得到更接近作者口径的正式文本 eval，尤其是避开/修复当前 Isaac GPU eval reset 问题。
+- `[next]` 研究如何把 Isaac eval 扩大到更接近作者口径，同时避开/修复当前 GPU eval reset 问题。
 - `[optional]` ROS2/真机部署只保留为附录和后续工作，不再压过 policy 训练与验证主线。
 
 计划会随着新证据调整；不要把这里当作固定路线图。
@@ -1706,6 +1707,102 @@ seed 15: ownfinal dynamic_collision, final_dyn_clearance=0.263; dynstopfinal rea
 1. 如果要继续训练，应基于 `dynstopfinal` 或同类 reward 设计，而不是回到原始 reward 盲目加长。
 2. 更正式的复现需要恢复/替代 Isaac eval 的 GPU reset 问题，产出接近作者评估口径的文本指标。
 3. 暂时不再扩展 ROS2 synthetic 工具。
+
+## 2026-04-19 干净 Isaac eval-only 入口
+
+目的：
+
+- 回到 policy 复现主线，避免只依赖 quick-demo 近似 evaluator。
+- 新增一个干净的 Isaac eval-only 入口，支持任意 checkpoint 路径，输出文本 JSON 指标。
+- 不使用历史 `training/scripts/eval.py`，因为它硬编码了旧 checkpoint，且最后会 `sim_app.close()`。
+
+新增文件：
+
+```text
+isaac-training/training/scripts/eval_clean_noclose.py
+```
+
+脚本行为：
+
+- 启动 `SimulationApp`；
+- 构建 `NavigationEnv + VelController + PPO`；
+- 通过 `+checkpoint=/abs/path/to/checkpoint.pt` 加载 policy；
+- 调用 `utils.evaluate()`；
+- 打印 `[EVAL-JSON] {...}`；
+- 最后打印 `NO_CLOSE_EXIT`，不调用 `sim_app.close()`。
+
+踩坑修复：
+
+- 第一次用 `checkpoint=...` 会被 Hydra 拒绝，正确写法是 `+checkpoint=...`。
+- `PPO` 类把 `train()` 用作 PPO 更新函数，因此不能调用 `policy.eval()`；否则会触发：
+
+```text
+TypeError: 'bool' object is not subscriptable
+```
+
+- 已删除 `policy.eval()`，和训练脚本保持一致。
+
+小规模 CPU eval 验证：
+
+```bash
+export ISAACSIM_PATH=$HOME/.local/share/ov/pkg
+export CARB_APP_PATH=$ISAACSIM_PATH/kit
+source $ISAACSIM_PATH/setup_conda_env.sh
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+cd /home/ubuntu/projects/NavRL/isaac-training
+
+/home/ubuntu/miniconda3/envs/NavRL/bin/python training/scripts/eval_clean_noclose.py \
+  headless=True \
+  device=cpu \
+  sim.device=cpu \
+  sim.use_gpu=False \
+  sim.use_gpu_pipeline=False \
+  env.num_envs=16 \
+  env.num_obstacles=40 \
+  env_dyn.num_obstacles=10 \
+  env.max_episode_length=300 \
+  wandb.mode=disabled \
+  +checkpoint=/home/ubuntu/projects/NavRL/policies/dynstopfinal_20260418/checkpoint_final.pt
+```
+
+运行注意：
+
+- Isaac eval 必须在沙箱外运行；沙箱内会出现 no CUDA / Kit cache read-only 等误导性问题。
+- 本次使用 CPU、小规模、短 episode，只验证入口和指标输出，不作为正式复现结果。
+
+结果：
+
+```text
+[EVAL-STATS-RAW] {
+  'eval/stats.collision': 0.0,
+  'eval/stats.episode_len': 300.0,
+  'eval/stats.reach_goal': 0.0625,
+  'eval/stats.return': 1573.6507568359375,
+  'eval/stats.truncated': 1.0
+}
+
+[EVAL-JSON] {
+  "eval/stats.collision": 0.0,
+  "eval/stats.episode_len": 300.0,
+  "eval/stats.reach_goal": 0.0625,
+  "eval/stats.return": 1573.6507568359375,
+  "eval/stats.truncated": 1.0
+}
+
+NO_CLOSE_EXIT
+```
+
+解释：
+
+- 入口有效：checkpoint 加载、rollout、stats 输出都成功。
+- 这不是正式指标：`num_envs=16`、`num_obstacles=40`、`env_dyn.num_obstacles=10`、`max_episode_length=300` 都远小于作者式配置。
+- 但它提供了后续扩大 Isaac eval 的干净起点。
+
+下一步：
+
+1. 尝试中等规模 CPU eval，观察是否仍能稳定输出 stats。
+2. 谨慎测试 GPU eval，只用于定位 reset/Direct GPU API 问题，不把失败混同为 policy 失败。
+3. 如果要得到正式结果，需要接近 `1024 / 350 / 80` 和更长 episode，同时解决 GPU eval/reset 兼容问题。
 
 
 ## 2026-04-18 ROS2 辅助验证附录（压缩版）
