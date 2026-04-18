@@ -28,8 +28,12 @@
 - `[done]` 给干净 noeval0 训练入口增加默认关闭的 JSONL metrics 日志，方便后续继续训练时保留文本证据。
 - `[done]` 给干净 noeval0 训练入口增加默认关闭的 checkpoint 加载参数，方便从 `checkpoint_1500.pt` 做短阶段继续训练。
 - `[done]` 执行一次从 `checkpoint_1500.pt` 接续的 10M 短阶段训练，并保留 metrics。
-- `[doing]` 分析为什么 10M 接续训练没有改善 dynamic path-crossing，避免沿错误方向继续加长训练。
-- `[next]` 回到 reward / termination / 动态障碍分布设计，判断是否需要最小目标修复，而不是直接重跑 1.2B。
+- `[done]` 分析为什么 10M 接续训练没有改善 dynamic path-crossing，避免沿错误方向继续加长训练。
+- `[done]` 添加默认关闭的 reward ablation 开关：碰撞惩罚、成功奖励/终止、动态障碍近距离停滞惩罚。
+- `[done]` 跑一个 5M 定向 ablation：只打开动态障碍近距离停滞惩罚，验证是否能减少 `path-crossing` 中停在障碍路径上的坏行为。
+- `[done]` 用固定离线 evaluator 对 ablation checkpoint 做 dynamic path-crossing 和 mixed 场景对比。
+- `[doing]` 把 `dynstopfinal` 作为新的自训练候选，继续做更接近作者部署路径的验证和边界确认。
+- `[next]` 做 trace/失败样本复查，确认 `dynstopfinal` 是否真的消除了“停在动态障碍路径上”的失败模式，而不是只在统计上偶然变好。
 - `[optional]` 如果确认是动态横穿训练不足，再设计小规模继续训练实验，而不是直接 1.2B 长训。
 - `[blocked]` 真实 ROS2 `safe_action_node` 构建：当前服务器缺 `/opt/ros/humble/setup.bash`、`ros2`、`colcon`。
 
@@ -1210,6 +1214,313 @@ contfinal reach=14/20 dynamic_col=0/20 timeout=6/20  min_dynamic=0.853
   - 是否需要针对 dynamic path-crossing / 停在障碍路径上的状态增加分布或负反馈；
   - 是否应先做很小的 ablation，而不是直接长训。
 
+## Reward Ablation 开关
+
+目标：
+
+- 不改变作者默认训练逻辑。
+- 允许用显式配置做最小 ablation，验证 reward / termination 是否是当前自训练 policy 动态横穿不足的原因。
+- 所有开关默认关闭，因此默认行为仍与当前作者式训练目标一致。
+
+调整文件：
+
+```text
+isaac-training/training/cfg/train.yaml
+isaac-training/training/scripts/env.py
+```
+
+新增默认配置：
+
+```yaml
+reward:
+  collision_penalty: 0.0
+  success_reward: 0.0
+  terminate_on_reach_goal: false
+  dynamic_stop_penalty: 0.0
+  dynamic_stop_distance: 1.0
+  dynamic_stop_speed: 0.2
+```
+
+含义：
+
+- `collision_penalty`：恢复或调整碰撞负奖励。默认 `0.0`，保持原代码中碰撞惩罚注释掉的行为。
+- `success_reward`：给到达目标的状态额外奖励。默认 `0.0`。
+- `terminate_on_reach_goal`：到达目标后是否终止 episode。默认 `false`。
+- `dynamic_stop_penalty`：当机器人在动态障碍近距离内速度过低时扣分，用于测试“停在动态障碍路径上”这个失败模式。
+- `dynamic_stop_distance`：触发停滞惩罚的动态障碍 2D 距离阈值。
+- `dynamic_stop_speed`：触发停滞惩罚的机器人 2D 速度阈值。
+
+验证：
+
+```text
+python3 -m py_compile isaac-training/training/scripts/env.py
+python3 -m py_compile isaac-training/training/scripts/train_clean_noclose_noeval0.py
+```
+
+结果：
+
+- 语法检查通过。
+- 尚未说明 ablation 有效，只说明默认关闭的开关可以被编译。
+
+第一个定向 ablation 计划：
+
+- 起点：`checkpoint_1500.pt`。
+- 训练长度：5M frames。
+- 只打开：
+
+```text
+reward.dynamic_stop_penalty=1.0
+reward.dynamic_stop_distance=1.2
+reward.dynamic_stop_speed=0.2
+```
+
+为什么先测这个：
+
+- 逐帧 trace 看到的主要失败模式是 `ownfinal` 在动态障碍靠近时速度降到接近 0，并停在动态障碍路径附近。
+- 直接继续训练 10M 没有改善这个问题。
+- 所以先用最小定向惩罚验证“停滞行为是否可被 reward 压住”，而不是马上改成功奖励或大范围重构环境。
+
+成功应该看到：
+
+- 训练正常 `NO_CLOSE_EXIT`。
+- `metrics.jsonl` 正常增长。
+- dynamic path-crossing 的 reach 不低于 `own1500`，dynamic collision 不增加。
+
+失败怎么看：
+
+- 如果训练崩，先按日志关键词区分 Isaac/PhysX 路径和 PPO 路径。
+- 如果训练正常但 evaluator 变差，说明这个定向 reward 不该作为主线。
+- 如果只减少 collision 但 timeout 增多，说明它只是更保守，不是真正复现作者动态穿越行为。
+
+### Dynamic Stop Ablation 5M 结果
+
+运行目录：
+
+```text
+isaac-training/runs/navrl_1024_ablate_dynstop_5m_20260418
+```
+
+启动配置：
+
+```text
+env.num_envs=1024
+env.num_obstacles=350
+env_dyn.num_obstacles=80
+max_frame_num=5000000
+eval_interval=999999
+save_interval=50
+reward.dynamic_stop_penalty=1.0
+reward.dynamic_stop_distance=1.2
+reward.dynamic_stop_speed=0.2
++checkpoint=.../navrl_1024_50m_20260417_policy_retry1/ckpts/checkpoint_1500.pt
+```
+
+训练结果：
+
+```text
+[Reward Ablation] collision_penalty=0.0, success_reward=0.0, terminate_on_reach_goal=False, dynamic_stop_penalty=1.0, dynamic_stop_distance=1.2, dynamic_stop_speed=0.2
+[CKPT] loaded checkpoint from .../checkpoint_1500.pt
+[NavRL]: model saved at training step: 0
+[NavRL]: model saved at training step: 50
+[NavRL]: model saved at training step: 100
+[NavRL]: model saved at training step: 150
+NO_CLOSE_EXIT
+```
+
+输出 checkpoint：
+
+```text
+checkpoint_0.pt
+checkpoint_50.pt
+checkpoint_100.pt
+checkpoint_150.pt
+checkpoint_final.pt
+```
+
+metrics 末尾：
+
+```text
+step=152
+env_frames=5013504
+batch/stats.return=5643.3926
+batch/stats.reach_goal=0.2772
+batch/stats.collision=0.000244
+batch/stats.truncated=0.000305
+```
+
+dynamic path-crossing，无 safe_action：
+
+```text
+author       reach=20/20 dynamic_col=0/20 timeout=0/20 min_dynamic=0.668
+own1500      reach=16/20 dynamic_col=0/20 timeout=4/20 min_dynamic=1.007
+dynstop150   reach=19/20 dynamic_col=0/20 timeout=1/20 min_dynamic=0.666
+dynstopfinal reach=20/20 dynamic_col=0/20 timeout=0/20 min_dynamic=0.748
+```
+
+dynamic path-crossing，启用 Python 近似 safe_action：
+
+```text
+author       reach=20/20 dynamic_col=0/20 timeout=0/20 min_dynamic=0.846
+own1500      reach=16/20 dynamic_col=0/20 timeout=4/20 min_dynamic=1.009
+dynstop150   reach=20/20 dynamic_col=0/20 timeout=0/20 min_dynamic=0.895
+dynstopfinal reach=20/20 dynamic_col=0/20 timeout=0/20 min_dynamic=0.871
+```
+
+ROS2-style mixed，无 safe_action：
+
+```text
+author       reach= 2/20 static_col=17/20 dynamic_col=1/20 timeout=0/20
+own1500      reach=12/20 static_col= 3/20 dynamic_col=1/20 timeout=4/20
+dynstop150   reach=15/20 static_col= 4/20 dynamic_col=0/20 timeout=1/20
+dynstopfinal reach=15/20 static_col= 3/20 dynamic_col=0/20 timeout=2/20
+```
+
+ROS2-style mixed，启用 Python 近似 safe_action：
+
+```text
+author       reach= 2/20 static_col=18/20 dynamic_col=0/20 timeout=0/20
+own1500      reach=14/20 static_col= 1/20 dynamic_col=1/20 timeout=4/20
+dynstop150   reach=17/20 static_col= 1/20 dynamic_col=0/20 timeout=2/20
+dynstopfinal reach=16/20 static_col= 2/20 dynamic_col=0/20 timeout=2/20
+```
+
+当前解释：
+
+- `dynamic_stop_penalty` 这条假设被强支持：它直接针对 trace 里看到的“动态障碍靠近时停在障碍路径上”失败模式，并显著改善了 `path-crossing`。
+- 与 10M 无改动继续训练不同，5M 定向 ablation 同时改善了 dynamic path-crossing 和 mixed 场景里的 dynamic collision。
+- `dynstopfinal` 是当前最强自训练候选：
+  - dynamic path-crossing 无 safe_action 达到 `20/20`；
+  - mixed 无 safe_action 比 `own1500` reach 更高，dynamic collision 从 `1/20` 降到 `0/20`；
+  - mixed safe_action 下 `dynstop150` reach 最高，`dynstopfinal` 也明显优于 `own1500` 的 dynamic collision。
+
+边界：
+
+- 这仍然是离线简化 evaluator，不是 Isaac eval，也不是完整 ROS2 真机部署。
+- `dynamic_stop_penalty` 是复现调试中的最小修复假设，不一定是作者原始训练 reward。
+- 如果目标是严格复现作者训练，应把这条改动作为 ablation 结果记录，而不是直接声称“作者就是这样训练的”。
+
+下一步：
+
+- 对 seed 14 / 15 这类旧失败样本做 trace 复查，确认 `dynstopfinal` 是否真的不再停在动态障碍路径上。
+- 再补一轮多机器人 quick-demo 或固定 `run_repro_eval.sh`，确认没有明显场景回退。
+- 如果要进入更接近最终复现的路线，应优先考虑把 `dynstopfinal` 接入作者 ROS2-style / safe_action 路径，而不是继续长训。
+
+### Seed 14 / 15 Trace 复查
+
+目标：
+
+- 回到旧失败样本，确认 `dynstopfinal` 是否真的修掉了 `ownfinal` 的失败机制。
+- 旧失败机制：动态障碍接近时速度降到接近 0，并停在动态障碍路径附近，最终 dynamic collision。
+
+生成 trace：
+
+```text
+quick-demos/eval_outputs/path_crossing_trace_seed14_dynstop_compare.csv
+quick-demos/eval_outputs/path_crossing_trace_seed15_dynstop_compare.csv
+```
+
+seed 14：
+
+```text
+author       final=reached           min_clr=0.668 first_slow_close=None win_speed=1.174 win_ay=0.955
+own1500      final=reached           min_clr=1.638 first_slow_close=None
+ownfinal     final=dynamic_collision min_clr=0.313 first_slow_close=181  win_speed=0.162 win_ay=0.139 speed@min=0.007
+dynstopfinal final=reached           min_clr=1.413 first_slow_close=None win_speed=0.840 win_ay=0.838 speed@min=0.849
+```
+
+seed 15：
+
+```text
+author       final=reached           min_clr=0.820 first_slow_close=None win_speed=1.006 win_ay=0.964
+own1500      final=reached           min_clr=1.589 first_slow_close=None
+ownfinal     final=dynamic_collision min_clr=0.313 first_slow_close=183  win_speed=0.139 win_ay=0.123 speed@min=0.014
+dynstopfinal final=reached           min_clr=1.234 first_slow_close=None win_speed=0.877 win_ay=0.837 speed@min=0.853
+```
+
+解释：
+
+- `ownfinal` 在两个旧失败样本中都会进入 close range 后减速到几乎停止。
+- `dynstopfinal` 在同样 seed 下保持横向速度，且没有 `first_slow_close`。
+- 这说明 `dynamic_stop_penalty` 不是只让统计偶然变好，而是确实改变了之前观察到的失败动作模式。
+
+### 固定评估脚本更新与复跑
+
+调整文件：
+
+```text
+quick-demos/run_repro_eval.sh
+```
+
+调整内容：
+
+- 如果本地存在 dynstop checkpoint，自动加入：
+  - `dynstop150`
+  - `dynstopfinal`
+- 如果本地不存在这些 checkpoint，脚本仍可用，不会传入不存在的 policy 路径。
+- `bash -n quick-demos/run_repro_eval.sh` 通过。
+
+完整复跑日志：
+
+```text
+quick-demos/eval_outputs/repro_eval_20260418_003504.log
+```
+
+注意：
+
+- 该日志在 `quick-demos/eval_outputs/` 下，当前被 `.gitignore` 忽略。
+- 这次全量脚本候选更多，运行明显比单项 evaluator 慢；不要把中途长时间无输出误判成卡死。
+
+固定脚本结果摘要：
+
+ROS2-style mixed，无 safe_action：
+
+```text
+author       reach= 2/20 static_col=17/20 dynamic_col=1/20 timeout=0/20
+own1000      reach= 4/20 static_col=11/20 dynamic_col=2/20 timeout=3/20
+own1500      reach=12/20 static_col= 3/20 dynamic_col=1/20 timeout=4/20
+ownfinal     reach=14/20 static_col= 2/20 dynamic_col=1/20 timeout=3/20
+dynstop150   reach=15/20 static_col= 4/20 dynamic_col=0/20 timeout=1/20
+dynstopfinal reach=15/20 static_col= 3/20 dynamic_col=0/20 timeout=2/20
+```
+
+ROS2-style mixed，safe_action 近似，10 seeds：
+
+```text
+author       reach=1/10 static_col=9/10 dynamic_col=0/10 timeout=0/10
+own1500      reach=8/10 static_col=0/10 dynamic_col=1/10 timeout=1/10
+ownfinal     reach=8/10 static_col=1/10 dynamic_col=0/10 timeout=1/10
+dynstop150   reach=9/10 static_col=0/10 dynamic_col=0/10 timeout=1/10
+dynstopfinal reach=9/10 static_col=0/10 dynamic_col=0/10 timeout=1/10
+```
+
+ROS2-style dynamic path-crossing，无 safe_action：
+
+```text
+author       reach=20/20 dynamic_col=0/20 timeout=0/20
+own1000      reach=11/20 dynamic_col=0/20 timeout=9/20
+own1500      reach=16/20 dynamic_col=0/20 timeout=4/20
+ownfinal     reach=14/20 dynamic_col=2/20 timeout=4/20
+dynstop150   reach=19/20 dynamic_col=0/20 timeout=1/20
+dynstopfinal reach=20/20 dynamic_col=0/20 timeout=0/20
+```
+
+ROS2-style dynamic path-crossing，safe_action 近似：
+
+```text
+author       reach=20/20 dynamic_col=0/20 timeout=0/20
+own1500      reach=16/20 dynamic_col=0/20 timeout=4/20
+ownfinal     reach=15/20 dynamic_col=2/20 timeout=3/20
+dynstop150   reach=20/20 dynamic_col=0/20 timeout=0/20
+dynstopfinal reach=20/20 dynamic_col=0/20 timeout=0/20
+```
+
+结论：
+
+- 固定脚本复跑支持前面的单项结论：`dynstopfinal` 是当前最强自训练候选。
+- `dynstopfinal` 在 dynamic path-crossing 上追平作者 checkpoint 的 reach / collision / timeout。
+- 在 mixed 场景里，`dynstopfinal` 没有出现 dynamic collision，但仍有静态碰撞和 timeout，说明它不是完整复现，只是显著推进了动态障碍部分。
+- 这仍然是离线 ROS2-style 近似，不是 Isaac eval 或真实 ROS2 节点运行。
+
 ## 重要限制
 
 - 这些 quick-demo rollout 不是 Isaac eval。
@@ -1223,9 +1534,10 @@ contfinal reach=14/20 dynamic_col=0/20 timeout=6/20  min_dynamic=0.853
 
 - 1024 / 350 / 80 GPU 训练在跳过 step-0 eval 后可用。
 - 50M 训练产出了有意义的局部避障 policy。
-- `checkpoint_1500.pt` 仍是主候选，因为它在 quick-demo 和多机器人测试里都强，并且 dynamic-input 清洗次数明显少于 final。
-- `checkpoint_final.pt` 也很有竞争力，并且在 ROS2-style mixed 离线测试里数值最好，但它在多机器人 quick-demo 验证中出现更多 dynamic-input 清洗事件。
+- 原始 50M 里 `checkpoint_1500.pt` 仍是稳定 baseline；`checkpoint_final.pt` 是强竞争 baseline，但动态横穿有碰撞。
 - 从 `checkpoint_1500.pt` 继续 10M，在当前 reward / 分布不变的情况下没有改善 dynamic path-crossing，因此不能把“继续加训练步数”作为主线。
+- 5M `dynamic_stop_penalty` ablation 显著改善动态横穿；`dynstopfinal` 是当前最强自训练候选。
+- `dynstopfinal` 在 ROS2-style dynamic path-crossing 上达到 `20/20` reach、`0/20` dynamic collision、`0/20` timeout；mixed 场景 dynamic collision 也降为 `0/20`。
 - 当前主要缺口不是“能不能训练”，而是继续把候选 policy 放到更接近作者部署路径的验证里：
   - ROS2 输入编码；
   - 动态障碍服务；
@@ -1235,9 +1547,820 @@ contfinal reach=14/20 dynamic_col=0/20 timeout=6/20  min_dynamic=0.853
 
 ## 建议下一步
 
-1. 使用 `checkpoint_1500.pt` 作为下一阶段主候选。
-2. 保留 `checkpoint_final.pt` 作为强竞争候选。
-3. 保留 `checkpoint_1000.pt` 作为稳定 fallback baseline。
-4. 不要在成功标准更清晰之前直接启动 1.2B 长训练。
-5. 暂停“同配置继续训练”路线，先做 reward / termination / 动态障碍分布的最小 ablation 设计。
-6. 如果再继续训练，必须先说明改动想验证什么，并保留 `metrics.jsonl` 与固定离线 evaluator 结果。
+1. 使用 `dynstopfinal` 作为当前自训练主候选。
+2. 保留 `checkpoint_1500.pt` 作为无 ablation 稳定 baseline。
+3. 保留 `checkpoint_final.pt` / `checkpoint_1000.pt` 作为对照 baseline。
+4. 不要直接启动 1.2B 长训练；当前收益来自定向 reward 修复，不是单纯加长训练。
+5. 下一步优先做 trace/失败样本复查，确认 `dynstopfinal` 是否真的消除了“停在动态障碍路径上”的失败模式。
+6. 再推进更接近作者部署路径的验证：真实 ROS2 环境、safe_action_node、目标减速/停止逻辑。
+
+## 2026-04-18 ROS2 部署链路预检
+
+目的：
+
+- 复现目标不能只停留在 Isaac training / quick-demo 层面，需要推进到作者 ROS2 部署链路。
+- 这一阶段先确认作者提供的 ROS2 包能否在服务器上编译、被 ROS2 发现、并运行 `safe_action_node` 的最小服务调用。
+- 这一步不评价 policy 成功率，只验证部署基础链路。
+
+执行前提：
+
+- 用户已在服务器安装 ROS2。
+- 使用 ROS2 Humble：`/opt/ros/humble/setup.bash`。
+- 为避免污染仓库，ROS2 workspace 放在仓库外层项目目录：
+  - `/home/ubuntu/projects/navrl_ros2_ws`
+- workspace 里通过 symlink 引入作者包：
+  - `/home/ubuntu/projects/NavRL/ros2/onboard_detector`
+  - `/home/ubuntu/projects/NavRL/ros2/map_manager`
+  - `/home/ubuntu/projects/NavRL/ros2/navigation_runner`
+
+预检命令：
+
+```bash
+source /opt/ros/humble/setup.bash
+bash ros2/check_ros2_build_env.sh
+```
+
+结果：
+
+```text
+PASS: ROS2 build environment preflight checks passed.
+```
+
+包发现命令：
+
+```bash
+cd /home/ubuntu/projects/navrl_ros2_ws
+source /opt/ros/humble/setup.bash
+colcon list
+```
+
+结果：
+
+```text
+map_manager          src/map_manager          (ros.ament_cmake)
+navigation_runner    src/navigation_runner    (ros.ament_cmake)
+onboard_detector     src/onboard_detector     (ros.ament_cmake)
+```
+
+首次编译命令：
+
+```bash
+cd /home/ubuntu/projects/navrl_ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+```
+
+结果：
+
+```text
+Finished <<< onboard_detector [2min 0s]
+Finished <<< map_manager [2min 30s]
+Finished <<< navigation_runner [30.0s]
+Summary: 3 packages finished [5min 1s]
+```
+
+编译后可执行文件检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+ros2 pkg executables navigation_runner
+ros2 pkg executables map_manager
+ros2 pkg executables onboard_detector
+```
+
+结果：
+
+```text
+navigation_runner navigation_node.py
+navigation_runner safe_action_node
+map_manager esdf_map_node
+map_manager occupancy_map_node
+onboard_detector dynamic_detector_node
+onboard_detector yolo_detector_node.py
+```
+
+`safe_action` 服务接口检查：
+
+```bash
+ros2 interface show navigation_runner/srv/GetSafeAction
+```
+
+确认接口包含：
+
+- agent position / velocity / size；
+- dynamic obstacles position / velocity / size；
+- static laser points；
+- max velocity；
+- RL velocity；
+- 返回 safe action。
+
+最小运行验收：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+export ROS_DOMAIN_ID=43
+ros2 run navigation_runner safe_action_node
+```
+
+然后调用：
+
+```bash
+ros2 service call /safe_action/get_safe_action navigation_runner/srv/GetSafeAction \
+"{agent_position: {x: 0.0, y: 0.0, z: 1.0}, agent_velocity: {x: 0.0, y: 0.0, z: 0.0}, agent_size: 0.3, obs_position: [], obs_velocity: [], obs_size: [], laser_points: [], laser_range: 5.0, laser_res: 0.1, max_velocity: 1.0, rl_velocity: {x: 0.5, y: 0.0, z: 0.0}}"
+```
+
+结果：
+
+```text
+/safe_action/get_safe_action
+response:
+navigation_runner.srv.GetSafeAction_Response(
+  safe_action=geometry_msgs.msg.Vector3(x=0.5, y=0.0, z=0.0)
+)
+```
+
+判断：
+
+- ROS2 安装已满足当前 NavRL 作者 ROS2 包的基础编译需求。
+- `onboard_detector`、`map_manager`、`navigation_runner` 三个包均能在 Humble 上编译。
+- `safe_action_node` 不只是能编译，最小服务请求链路也能跑通。
+- 空障碍输入下，`safe_action` 等于 RL velocity，符合预期。
+
+注意事项：
+
+- 在 Codex 默认沙盒内直接运行 ROS2 service/list 会因为 socket 权限报 `Operation not permitted`；这不是 NavRL 代码错误。
+- 运行 ROS2 节点时需要让日志写到可写目录，例如：
+  - `ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros`
+- 目前只完成了 `safe_action_node` 的最小服务验收，还没有启动完整 `navigation_node.py`、map 服务、detector 服务，也还没有接入真实 policy 推理和传感器数据。
+
+## 当前滚动计划
+
+1. 已完成：1024 / 350 / 80 GPU 训练路径确认，`noeval0` 可跑。
+2. 已完成：50M 自训练 policy 和 5M `dynamic_stop_penalty` ablation。
+3. 已完成：quick-demo/ROS2-style 离线评估，当前最强候选是 `dynstopfinal`。
+4. 已完成：ROS2 三个作者包编译通过。
+5. 已完成：`safe_action_node` 最小服务调用通过。
+6. 下一步：阅读并验证 `navigation_node.py` 的 policy 加载、输入编码、目标减速/停止逻辑。
+7. 下一步：做最小 ROS2 policy 推理链路测试，优先不启动真实传感器，只验证作者节点能否加载 checkpoint 并构造 action。
+8. 下一步：把 `dynstopfinal` 和作者 checkpoint 都放到更接近 ROS2 节点的输入路径里对比。
+9. 暂缓：1.2B 长训练。当前更值得先确认部署链路和任务信号，而不是直接加长训练。
+
+## 2026-04-18 ROS2 `navigation_node.py` 启动与 checkpoint 加载
+
+目的：
+
+- 继续靠近作者真实部署路径。
+- 验证 `navigation_node.py` 的 Python 依赖、Hydra 配置、checkpoint 路径、PPO 网络结构是否能在服务器上跑通。
+- 这一步仍不评价导航效果，只确认 ROS2 policy 节点能否启动到模型加载阶段。
+
+代码阅读结论：
+
+- `navigation_node.py` 使用 Hydra 读取 `ros2/navigation_runner/scripts/cfg/train.yaml`。
+- `Navigation.__init__()` 会先等待 `/occupancy_map/raycast` 服务，然后才加载模型。
+- 模型默认参数：
+  - ROS 参数名：`checkpoint_file`
+  - 默认值：`navrl_checkpoint.pt`
+  - 实际路径：`ros2/navigation_runner/scripts/ckpts/navrl_checkpoint.pt`
+- ROS2 侧作者 checkpoint SHA256：
+
+```text
+51fa3dbdc6ba89626b5dad3a4638deb53d40aa6f0caa9b289657da4a8e0b60c3  navrl_checkpoint.pt
+```
+
+Python 环境检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+python3 - <<'PY'
+import torch
+PY
+```
+
+系统 Python 结果：
+
+```text
+/usr/bin/python3
+torch FAIL ModuleNotFoundError No module named 'torch'
+torchrl FAIL ModuleNotFoundError No module named 'torchrl'
+tensordict FAIL ModuleNotFoundError No module named 'tensordict'
+hydra FAIL ModuleNotFoundError No module named 'hydra'
+rclpy OK
+```
+
+NavRL conda Python 结果：
+
+```text
+/home/ubuntu/miniconda3/envs/NavRL/bin/python
+torch OK 2.0.1+cu118
+torchrl OK 0.4.0+3725bcc
+tensordict OK 0.4.0+3725bcc
+hydra OK 1.3.2
+rclpy OK
+```
+
+判断：
+
+- 直接 `ros2 run navigation_runner navigation_node.py` 会走系统 Python，因此缺 `torch`。
+- 最小可行方式不是把训练依赖装进系统 Python，而是在运行 ROS2 Python 节点时把 NavRL conda Python 放到 `PATH` 前面：
+
+```bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+```
+
+短启动测试 1：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+timeout 8 ros2 run navigation_runner navigation_node.py
+```
+
+结果：
+
+```text
+[navRunner]: Velocity limit: 1.0.
+[navRunner]: Visualize raycast is set to: False.
+[navRunner]: Odom topic name: /unitree_go2/odom.
+[navRunner]: Command topic name: /unitree_go2/cmd_vel.
+[navRunner]: Service /occupancy_map/raycast not available, waiting...
+```
+
+判断：
+
+- conda Python 方式能通过 import 阶段。
+- 节点卡在等待 `/occupancy_map/raycast` 是代码预期行为，不是错误。
+
+短启动测试 2：
+
+先启动 map 服务：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+ros2 run map_manager occupancy_map_node
+```
+
+再短启动 navigation：
+
+```bash
+timeout 15 ros2 run navigation_runner navigation_node.py
+```
+
+结果：
+
+```text
+[navRunner]: Checkpoint: navrl_checkpoint.pt.
+[navRunner]: Model load successfully.
+[navRunner]: Start running!
+```
+
+末尾有：
+
+```text
+rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called
+```
+
+判断：
+
+- 该错误来自 `timeout` 强制结束节点后的 ROS2 shutdown 清理，不是 checkpoint 加载失败。
+- 作者 ROS2 `navigation_node.py` 已经能在本服务器上加载作者 checkpoint 并进入运行状态。
+
+当前 ROS2 侧结论：
+
+- 编译链路：通过。
+- `safe_action_node` 最小服务：通过。
+- `navigation_node.py` Python 依赖：需要 conda Python PATH。
+- `navigation_node.py` checkpoint 加载：通过。
+- 尚未完成：完整 ROS2 runtime 输入链路，也就是 odom / goal / raycast / dynamic obstacle / safe_action / cmd_vel 的闭环文本验证。
+
+更新后的下一步：
+
+1. 启动 `occupancy_map_node`、`dynamic_detector_node`、`safe_action_node`、`navigation_node.py`。
+2. 用文本方式发布最小 odom 和 goal。
+3. 订阅 `/unitree_go2/cmd_vel`，确认节点是否能产生命令。
+4. 如果能产生命令，再比较作者 checkpoint 与 `dynstopfinal` 在 ROS2 节点输入路径下的动作差异。
+
+## 2026-04-18 ROS2 最小闭环：odom/goal 到 cmd_vel
+
+目的：
+
+- 验证不依赖 Isaac、不依赖 quick-demo 的 ROS2 runtime 最小闭环。
+- 这一步启动作者 ROS2 节点，然后只用文本发布 odom 和 goal，观察 `/unitree_go2/cmd_vel`。
+- 这不是导航成功率评估，只是验证作者 ROS2 节点链路已经能从输入走到速度命令输出。
+
+启动的节点：
+
+- `map_manager occupancy_map_node`
+- `onboard_detector dynamic_detector_node`
+- `navigation_runner safe_action_node`
+- `navigation_runner navigation_node.py`
+
+关键环境：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+```
+
+服务发现结果：
+
+```text
+/occupancy_map/raycast
+/onboard_detector/get_dynamic_obstacles
+/safe_action/get_safe_action
+```
+
+发布输入：
+
+```bash
+ros2 topic pub --once /unitree_go2/odom nav_msgs/msg/Odometry \
+"{header: {frame_id: map}, pose: {pose: {position: {x: 0.0, y: 0.0, z: 1.0}, orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}}}, twist: {twist: {linear: {x: 0.0, y: 0.0, z: 0.0}}}}"
+
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+"{header: {frame_id: map}, pose: {position: {x: 5.0, y: 0.0, z: 1.0}, orientation: {w: 1.0}}}"
+```
+
+作者 checkpoint 输出：
+
+```text
+linear:
+  x: 1.0
+  y: 0.0
+  z: 0.0
+angular:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+```
+
+日志检查：
+
+- `navigation_node` 输出：
+
+```text
+[navRunner]: Checkpoint: navrl_checkpoint.pt.
+[navRunner]: Model load successfully.
+[navRunner]: Start running!
+```
+
+- 四个节点日志未命中：
+
+```text
+Traceback|ERROR|Exception|failed|Aborted|Segmentation
+```
+
+判断：
+
+- 作者 checkpoint 已经能在 ROS2 节点闭环里从 odom/goal 走到 `/unitree_go2/cmd_vel`。
+- 当前场景没有真实障碍，输出 `x=1.0` 符合“朝目标直行”的直觉和代码逻辑。
+- 这仍不是复现实验结果，只是部署链路向前推进了一步。
+
+## 2026-04-18 ROS2 最小闭环：加载自训练 `dynstopfinal`
+
+目的：
+
+- 确认自训练 checkpoint 不是只能在 training / quick-demo 脚本里使用。
+- 验证它能通过作者 ROS2 `navigation_node.py` 的真实 checkpoint 加载路径，并输出 `/unitree_go2/cmd_vel`。
+
+checkpoint：
+
+```text
+/home/ubuntu/projects/NavRL/isaac-training/runs/navrl_1024_ablate_dynstop_5m_20260418/ckpts/checkpoint_final.pt
+```
+
+运行方式：
+
+```bash
+ros2 run navigation_runner navigation_node.py --ros-args \
+  -p checkpoint_file:=/home/ubuntu/projects/NavRL/isaac-training/runs/navrl_1024_ablate_dynstop_5m_20260418/ckpts/checkpoint_final.pt
+```
+
+日志：
+
+```text
+[navRunner]: Checkpoint: /home/ubuntu/projects/NavRL/isaac-training/runs/navrl_1024_ablate_dynstop_5m_20260418/ckpts/checkpoint_final.pt.
+[navRunner]: Model load successfully.
+[navRunner]: Start running!
+```
+
+同样 odom/goal 输入下输出：
+
+```text
+linear:
+  x: 1.0
+  y: 0.0
+  z: 0.0
+angular:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+```
+
+日志检查：
+
+- 未命中：
+
+```text
+Traceback|ERROR|Exception|failed|Aborted|Segmentation
+```
+
+判断：
+
+- `dynstopfinal` 已经能进入作者 ROS2 `navigation_node.py` 推理路径。
+- 这说明自训练 policy 与作者 ROS2 PPO 网络结构、checkpoint 格式、Hydra 配置至少在加载层面兼容。
+- 由于这个最小场景没有障碍，输出 `x=1.0` 主要验证链路，不足以区分作者 checkpoint 和 `dynstopfinal` 的避障能力。
+
+更新后的下一步：
+
+1. 构造 ROS2 节点层面的动态障碍输入，避免只测无障碍直行。
+2. 优先不改作者节点：可以通过动态障碍服务输入或轻量 stub 服务控制 obstacle response。
+3. 对比作者 checkpoint、`own1500`、`dynstopfinal` 在同一 ROS2 输入下的 `cmd_vel`。
+4. 如果 ROS2 层动作差异符合 quick-demo 趋势，再考虑是否需要进一步接 Isaac eval 或实机前仿真。
+
+## 2026-04-18 ROS2 动态障碍 stub 对比
+
+目的：
+
+- 无障碍最小闭环只能证明 ROS2 节点能输出直行速度，不能区分 policy。
+- 为了继续靠近作者部署路径，同时保持输入可控，新增一个测试辅助 stub：
+  - `ros2/tools/dynamic_obstacle_stub.py`
+- 该 stub 不改作者 `navigation_node.py`，只提供同名服务：
+  - `/onboard_detector/get_dynamic_obstacles`
+- 用它固定返回一个动态障碍，然后比较作者 checkpoint 与 `dynstopfinal` 的 `/unitree_go2/cmd_vel`。
+
+新增文件：
+
+```text
+ros2/tools/dynamic_obstacle_stub.py
+```
+
+语法检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+/home/ubuntu/miniconda3/envs/NavRL/bin/python -m py_compile ros2/tools/dynamic_obstacle_stub.py
+```
+
+结果：通过。
+
+测试输入：
+
+- odom：
+  - position = `(0.0, 0.0, 1.0)`
+  - orientation yaw = `0`
+  - velocity = `(0.0, 0.0, 0.0)`
+- goal：
+  - position = `(5.0, 0.0, 1.0)`
+- dynamic obstacle stub：
+  - position = `(2.0, 0.0, 1.0)`
+  - velocity = `(0.0, 0.0, 0.0)`
+  - size = `(0.8, 0.8, 1.0)`
+
+启动节点：
+
+- `map_manager occupancy_map_node`
+- `navigation_runner safe_action_node`
+- `ros2/tools/dynamic_obstacle_stub.py`
+- `navigation_runner navigation_node.py`
+
+作者 checkpoint 结果：
+
+```text
+[navRunner]: Checkpoint: navrl_checkpoint.pt.
+[navRunner]: Model load successfully.
+[navRunner]: Start running!
+
+linear:
+  x: 0.5279386043548584
+  y: 0.13685071468353271
+  z: 0.0
+angular:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+```
+
+`dynstopfinal` 结果：
+
+```text
+[navRunner]: Checkpoint: /home/ubuntu/projects/NavRL/isaac-training/runs/navrl_1024_ablate_dynstop_5m_20260418/ckpts/checkpoint_final.pt.
+[navRunner]: Model load successfully.
+[navRunner]: Start running!
+
+linear:
+  x: 0.10706663131713867
+  y: 0.285952091217041
+  z: 0.0
+angular:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+```
+
+日志检查：
+
+```text
+Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate
+```
+
+结果：未命中。
+
+判断：
+
+- ROS2 节点层面已经进入障碍相关路径，不再只是无障碍直行。
+- 同一受控动态障碍输入下，作者 checkpoint 输出仍以前向为主，略向 `+y` 偏转：
+  - `x≈0.528`
+  - `y≈0.137`
+- `dynstopfinal` 输出更保守的前向速度和更明显横向绕让：
+  - `x≈0.107`
+  - `y≈0.286`
+- 这和之前 `dynamic_stop_penalty` ablation 的趋势一致：`dynstopfinal` 更倾向于避免停在/冲进动态障碍路径。
+
+限制：
+
+- 这个测试里的动态障碍是 stub，不是真实 detector 由深度图/颜色图推出来的障碍。
+- 这个测试仍没有真实里程计闭环、地图更新、连续控制轨迹，也不是实机安全验证。
+- 输出是最终 `cmd_vel`，包含 policy、坐标变换、safe_action、目标距离逻辑共同作用；还不是纯 policy raw action。
+
+下一步建议：
+
+1. 增加可选 debug 日志或 debug topic，记录 `cmd_vel_world` 与 `safe_cmd_vel_world`，区分 policy raw action 和 safe_action 后处理。
+2. 用同一个动态障碍 stub 做多组位置/速度扫描，例如：
+   - 前方静止障碍；
+   - 横穿障碍；
+   - 侧前方障碍；
+   - 障碍远离目标路径。
+3. 对比作者 checkpoint、`own1500`、`dynstopfinal` 的 ROS2 节点输出表。
+4. 如果节点层对比稳定，再决定是否接入真实 detector 输入或回到 Isaac eval 修复。
+
+## 2026-04-18 ROS2 action debug topic
+
+目的：
+
+- 上一节只能看到最终 `/unitree_go2/cmd_vel`。
+- 最终速度包含：
+  - policy 输出；
+  - world/local 坐标变换；
+  - `safe_action_node` 后处理；
+  - 目标距离逻辑；
+  - `height_control=False` 时 z 方向置零。
+- 为了区分 policy raw action 和 safe_action 后处理，给 `navigation_node.py` 增加默认关闭的 debug topic。
+
+最小代码改动：
+
+文件：
+
+```text
+ros2/navigation_runner/scripts/navigation.py
+```
+
+新增 ROS 参数：
+
+```text
+debug_action_topics: false
+```
+
+开启后发布：
+
+```text
+/navigation_runner/debug/raw_cmd_vel_world
+/navigation_runner/debug/safe_cmd_vel_world
+```
+
+说明：
+
+- 默认关闭，不改变作者节点原行为。
+- debug topic 使用 `geometry_msgs/msg/Vector3`。
+- raw topic 记录 policy 输出的 world velocity。
+- safe topic 记录调用 `safe_action_node` 后的 world velocity。
+- 最终 `/unitree_go2/cmd_vel` 仍然是局部坐标下实际发布给机器人的命令。
+
+语法检查：
+
+```bash
+source /opt/ros/humble/setup.bash
+/home/ubuntu/miniconda3/envs/NavRL/bin/python -m py_compile \
+  ros2/navigation_runner/scripts/navigation.py \
+  ros2/tools/dynamic_obstacle_stub.py
+```
+
+结果：通过。
+
+同一动态障碍 stub 输入：
+
+```text
+agent: (0.0, 0.0, 1.0), yaw=0
+goal:  (5.0, 0.0, 1.0)
+obs:   pos=(2.0, 0.0, 1.0), vel=(0.0, 0.0, 0.0), size=(0.8, 0.8, 1.0)
+```
+
+作者 checkpoint debug 输出：
+
+```text
+raw_cmd_vel_world:
+  x: 0.5279386043548584
+  y: 0.13685071468353271
+  z: 0.46702325344085693
+
+safe_cmd_vel_world:
+  x: 0.5279386043548584
+  y: 0.13685071468353271
+  z: 0.0
+
+final /unitree_go2/cmd_vel:
+  linear.x: 0.5279386043548584
+  linear.y: 0.13685071468353271
+  linear.z: 0.0
+  angular.z: 0.0
+```
+
+`dynstopfinal` debug 输出：
+
+```text
+raw_cmd_vel_world:
+  x: 0.10706663131713867
+  y: 0.285952091217041
+  z: -0.032970964908599854
+
+safe_cmd_vel_world:
+  x: 0.10706663131713867
+  y: 0.285952091217041
+  z: -0.032970964908599854
+
+final /unitree_go2/cmd_vel:
+  linear.x: 0.10706663131713867
+  linear.y: 0.285952091217041
+  linear.z: 0.0
+  angular.z: 0.0
+```
+
+日志检查：
+
+```text
+Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate
+```
+
+结果：未命中。
+
+判断：
+
+- 在这个受控动态障碍场景中，作者 checkpoint 和 `dynstopfinal` 的 x/y 差异主要来自 policy raw action，不是 `safe_action_node` 把二者改成不同方向。
+- 作者 checkpoint 的 raw z 较大，但 safe_action / final command 把 z 压到 0；这符合当前 `height_control=False` 的平面控制路径。
+- `dynstopfinal` raw x 更小、y 更大，说明它在 ROS2 节点输入编码下也表现出更强绕让倾向。
+
+接下来更值得做的事：
+
+1. 用 debug topic 做一个小表格扫描，而不是只测一个障碍点。
+2. 扫描维度优先：
+   - obstacle y：`0.0, 0.5, -0.5`
+   - obstacle vx/vy：静止、横穿、迎面
+   - checkpoint：author、own1500、dynstopfinal
+3. 暂时不引入真实相机/点云，因为当前目标是先确认 policy 在 ROS2 编码路径下的行为是否稳定。
+
+## 2026-04-18 ROS2 横穿动态障碍单点对比
+
+目的：
+
+- 前方静止动态障碍只是一种输入，不足以代表动态避障。
+- 增加一个横穿障碍点，检查三组 checkpoint 在 ROS2 节点编码路径下的 raw/safe/final 输出。
+
+输入：
+
+```text
+agent: (0.0, 0.0, 1.0), yaw=0
+goal:  (5.0, 0.0, 1.0)
+obs:   pos=(2.0, -1.0, 1.0), vel=(0.0, 1.0, 0.0), size=(0.8, 0.8, 1.0)
+```
+
+作者 checkpoint：
+
+```text
+raw_cmd_vel_world:
+  x: -0.6430521011352539
+  y: 0.706621527671814
+  z: 0.3293442726135254
+
+safe_cmd_vel_world:
+  x: -0.6430521011352539
+  y: 0.706621527671814
+  z: 0.0
+
+final /unitree_go2/cmd_vel:
+  linear.x: -0.6430521011352539
+  linear.y: 0.706621527671814
+  linear.z: 0.0
+```
+
+`own1500`：
+
+```text
+raw_cmd_vel_world:
+  x: 0.2829403877258301
+  y: 0.5323700904846191
+  z: 0.24598252773284912
+
+safe_cmd_vel_world:
+  x: 0.2829403877258301
+  y: 0.5323700904846191
+  z: 0.0
+
+final /unitree_go2/cmd_vel:
+  linear.x: 0.2829403877258301
+  linear.y: 0.5323700904846191
+  linear.z: 0.0
+```
+
+`dynstopfinal`：
+
+```text
+raw_cmd_vel_world:
+  x: 0.4294644594192505
+  y: 0.5816572904586792
+  z: -0.0476108193397522
+
+safe_cmd_vel_world:
+  x: 0.4294644594192505
+  y: 0.5816572904586792
+  z: -0.0476108193397522
+
+final /unitree_go2/cmd_vel:
+  linear.x: 0.4294644594192505
+  linear.y: 0.5816572904586792
+  linear.z: 0.0
+```
+
+日志检查：
+
+```text
+Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate
+```
+
+结果：未命中。
+
+判断：
+
+- 该横穿输入下，作者 checkpoint 的 raw policy 最保守，直接给出负 x，也就是后退避让。
+- `own1500` 和 `dynstopfinal` 都保持正 x，同时给出较明显 `+y` 横向避让。
+- 这说明不能用单个场景简单说某个 checkpoint “总是更保守”或“总是更好”。
+- 需要做一个小规模 ROS2 节点层输入扫描，记录每个 checkpoint 的 raw/safe/final action。
+- 在当前两个动态障碍单点中，x/y 差异都主要来自 raw policy；`safe_action_node` 主要影响 z 或不改变 x/y。
+
+下一步优先级：
+
+1. 将当前手工 ROS2 对比整理成可复跑脚本，避免每次手写长命令。
+2. 用 6 到 9 个受控动态障碍输入形成小表。
+3. 再决定是否需要把 debug topic 保留为复现辅助，或只作为本地调试 patch。
+
+## 2026-04-18 Policy 备份到 GitHub
+
+目的：
+
+- 服务器可能被回收，需要把关键自训练 policy 保存到 GitHub。
+- 不把整个 `runs/` 目录推上去，只保存当前最有价值的少数 checkpoint。
+- 这一步是备份复现实验产物，不表示复现已经完成。
+
+新增目录：
+
+```text
+policies/
+```
+
+保存的 checkpoint：
+
+```text
+policies/dynstopfinal_20260418/checkpoint_final.pt
+policies/own1500_20260417/checkpoint_1500.pt
+policies/README.md
+```
+
+SHA256：
+
+```text
+2644f67a3979d42e409090c7935316838cbb7a01f0aa54843e80cdb25dd4907e  policies/dynstopfinal_20260418/checkpoint_final.pt
+b40a309fdaa5e1a9e1c1bcd8c0c77ec997428e881aeeab9f86f5ad44b64cc435  policies/own1500_20260417/checkpoint_1500.pt
+```
+
+选择理由：
+
+- `dynstopfinal_20260418`：
+  - 当前最强自训练候选；
+  - 来自 5M `dynamic_stop_penalty` ablation；
+  - 在 quick-demo dynamic path-crossing 和 ROS2 节点层动态障碍输入里表现最好或最有价值。
+- `own1500_20260417`：
+  - 无 ablation 的稳定 baseline；
+  - 用于后续判断 `dynamic_stop_penalty` 的收益是否真实。
+
+注意：
+
+- `.pt` 文件被 `.gitignore` 默认忽略，提交时需要显式 `git add -f`。
+- 暂时不提交完整 `runs/`、`ckpts/`、`logs/`。
+- 暂时不提交所有中间 checkpoint，避免仓库膨胀。
