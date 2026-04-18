@@ -12,7 +12,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header
-from vision_msgs.msg import Detection2DArray
+from vision_msgs.msg import Detection2D, Detection2DArray
 
 
 class SyntheticSensorPublisher(Node):
@@ -113,7 +113,22 @@ class SyntheticSensorPublisher(Node):
         detections = Detection2DArray()
         detections.header.stamp = stamp
         detections.header.frame_id = "map"
+        if self.args.yolo_box:
+            detections.detections.append(self.make_yolo_detection())
         self.yolo_pub.publish(detections)
+
+    def make_yolo_detection(self):
+        detection = Detection2D()
+        box_size = self.args.yolo_box_size or self.args.patch_size
+        box_width = self.args.yolo_box_width or box_size
+        box_height = self.args.yolo_box_height or box_size
+        x0 = max(0.0, self.args.width * 0.5 - box_width * 0.5 + self.args.yolo_box_x_offset)
+        y0 = max(0.0, self.args.height * 0.5 - box_height * 0.5 + self.args.yolo_box_y_offset)
+        detection.bbox.center.position.x = float(min(x0, self.args.width - 1))
+        detection.bbox.center.position.y = float(min(y0, self.args.height - 1))
+        detection.bbox.size_x = float(min(box_width, self.args.width))
+        detection.bbox.size_y = float(min(box_height, self.args.height))
+        return detection
 
 
 def parse_args():
@@ -128,6 +143,12 @@ def parse_args():
     parser.add_argument("--cloud-x", type=float, default=2.0)
     parser.add_argument("--cloud-side", type=int, default=5)
     parser.add_argument("--cloud-spacing", type=float, default=0.2)
+    parser.add_argument("--yolo-box", action="store_true", help="Publish one synthetic YOLO box aligned with the depth patch.")
+    parser.add_argument("--yolo-box-size", type=float, default=0.0, help="Synthetic YOLO box size in pixels; defaults to patch size.")
+    parser.add_argument("--yolo-box-width", type=float, default=0.0, help="Synthetic YOLO box width in pixels; overrides --yolo-box-size.")
+    parser.add_argument("--yolo-box-height", type=float, default=0.0, help="Synthetic YOLO box height in pixels; overrides --yolo-box-size.")
+    parser.add_argument("--yolo-box-x-offset", type=float, default=0.0, help="Pixel offset from the image-centered patch.")
+    parser.add_argument("--yolo-box-y-offset", type=float, default=0.0, help="Pixel offset from the image-centered patch.")
     return parser.parse_args()
 
 

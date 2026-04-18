@@ -2961,3 +2961,155 @@ b40a309fdaa5e1a9e1c1bcd8c0c77ec997428e881aeeab9f86f5ad44b64cc435  policies/own15
 - `.pt` 文件被 `.gitignore` 默认忽略，提交时需要显式 `git add -f`。
 - 暂时不提交完整 `runs/`、`ckpts/`、`logs/`。
 - 暂时不提交所有中间 checkpoint，避免仓库膨胀。
+
+## 2026-04-18 ROS2 dynamic detector 合成动态障碍预检
+
+目的：
+
+- 从作者 ROS2 系统思路继续推进，不只停留在 Isaac 训练。
+- 验证 `depth/color/pose + YOLO Detection2DArray -> dynamic_detector -> /onboard_detector/get_dynamic_obstacles` 这条链路能否在服务器上用文本方式闭环。
+- 这一步仍然是预检，不表示真机已可用。
+
+代码调整：
+
+- 文件：`ros2/tools/synthetic_sensor_publisher.py`
+- 默认行为不变：不加参数时仍发布空 `Detection2DArray`。
+- 新增参数：
+
+```text
+--yolo-box
+--yolo-box-size
+--yolo-box-width
+--yolo-box-height
+--yolo-box-x-offset
+--yolo-box-y-offset
+```
+
+- 新增脚本：`ros2/tools/run_synthetic_detector_preflight.sh`
+  - 固化已验证成功的 detector 合成输入参数；
+  - 自动启动 `dynamic_detector_node`；
+  - 自动发布 synthetic depth/color/pose/YOLO；
+  - 自动抓取 YOLO topic、dynamic bbox topic 和 detector service 返回；
+  - 输出目录默认写入本地 `runs/`，不提交 GitHub。
+
+原因：
+
+- `dynamicDetector.cpp` 里 YOLO 框只用于把已经形成的 3D filtered bbox 标成 `is_human/is_dynamic`。
+- 代码使用 `bbox.center.position.x/y` 作为 2D 框左上角，`size_x/size_y` 作为宽高；这与作者的 `yolo_detector.py` 发布方式一致。
+- 原合成输入只发空 YOLO，service 返回空是合理结果；需要非空 YOLO 框才能验证 human/dynamic 分支。
+
+测试 1：只加 YOLO 框，背景深度仍为 5m
+
+结果：
+
+```text
+/yolo_detector/detected_bounding_boxes: 非空
+/onboard_detector/filtered_bboxes: markers=[]
+/onboard_detector/dynamic_bboxes: markers=[]
+/onboard_detector/get_dynamic_obstacles: position=[], velocity=[], size=[]
+```
+
+解释：
+
+- YOLO topic 已经到达，但没有形成 3D filtered bbox。
+- 断点不在 YOLO 消息本身，而在 depth -> DBSCAN/UV/filter 这段。
+
+测试 2：背景深度设为 0，只保留 2m depth patch，YOLO 框未对齐
+
+命令核心参数：
+
+```text
+--depth-mm 0
+--patch-depth-mm 2000
+--patch-size 160
+--yolo-box
+--yolo-box-size 160
+```
+
+结果：
+
+```text
+/onboard_detector/dbscan_bboxes: 非空
+/onboard_detector/filtered_bboxes: 非空
+/onboard_detector/dynamic_bboxes: markers=[]
+/onboard_detector/get_dynamic_obstacles: position=[], velocity=[], size=[]
+```
+
+解释：
+
+- depth patch 已经能进入 3D bbox 生成链路。
+- 仍未成为 dynamic，是因为合成 YOLO 2D 框与 detector 自己从 3D bbox 投影出的 2D 框 IOU 不够。
+
+测试 3：背景深度设为 0，YOLO 框按投影结果对齐
+
+命令核心参数：
+
+```text
+--depth-mm 0
+--patch-depth-mm 2000
+--patch-size 160
+--yolo-box
+--yolo-box-width 250
+--yolo-box-height 390
+--yolo-box-x-offset -12
+--yolo-box-y-offset 73
+```
+
+结果：
+
+```text
+/yolo_detector/detected_bounding_boxes:
+  bbox top-left ~= (183, 118)
+  size ~= (250, 390)
+
+/onboard_detector/dynamic_bboxes:
+  markers: 非空
+
+/onboard_detector/get_dynamic_obstacles:
+  position=[(2.124, -0.003, 1.103)]
+  velocity=[(0.0, 0.0, 0.0)]
+  size=[(0.437, 0.811, 0.825)]
+```
+
+脚本复跑：
+
+```bash
+ROS_DOMAIN_ID=197 ros2/tools/run_synthetic_detector_preflight.sh \
+  /home/ubuntu/projects/NavRL/runs/ros2_synthetic_detector_preflight_script_20260418
+```
+
+结果同样非空：
+
+```text
+position=[(2.124, -0.003, 1.103)]
+velocity=[(0.0, 0.0, 0.0)]
+size=[(0.437, 0.811, 0.825)]
+```
+
+结论：
+
+- 在当前服务器上，作者 ROS2 dynamic detector 的核心 service 链路可以通过合成传感器输入产生非空动态障碍。
+- 这比之前“service 可调用但返回空”更进一步，说明 `navigation_node.py` 后续可以不只依赖手写 obstacle stub，也可以接真实 `onboard_detector` service。
+- 当前合成目标速度为 0，因此还不能证明运动分类逻辑复现；但 YOLO/person 分支可以把 filtered bbox 直接标成动态障碍。
+
+失败/风险解释：
+
+- 如果背景深度保持 5m，容易形成远处平面或干扰 depth/UV/DBSCAN，导致 filtered bbox 为空。
+- 如果 YOLO 2D 框不和 detector 投影框重合，`bestIOU > 0.5` 不成立，dynamic 输出仍为空。
+- 当前 detector 的返回高度/尺寸来自合成 depth patch 和相机外参，不能直接代表真实传感器效果。
+
+本地日志：
+
+```text
+runs/ros2_dynamic_detector_yolo_probe_20260418/
+runs/ros2_dynamic_detector_patch_only_probe_20260418/
+runs/ros2_dynamic_detector_patch_yolo_aligned_20260418/
+```
+
+这些是本地临时运行日志，不提交 GitHub。已将根目录 `runs/` 加入 `.gitignore`，避免误提交批量实验输出。
+
+下一步计划：
+
+1. 把 `navigation_node.py` 接到这个非空 detector service，做一次 `policy + safe_action + detector service` 的端到端 ROS2 文本预检。
+2. 再考虑 moving patch / moving YOLO box，验证 detector 运动分类分支，而不是只验证 YOLO/person 直通分支。
+3. 真机前还需要确认真实相机/雷达 topic、TF/外参、`safe_action_node` 输入单位和机器人速度限幅。

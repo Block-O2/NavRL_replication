@@ -117,6 +117,7 @@ isaac-training/outputs/
 *.onnx
 
 # bulk training artifacts
+runs/
 checkpoints/
 ckpts/
 models/
