@@ -39,8 +39,11 @@ POLICIES = [
 ]
 
 CASES = [
+    ("front_static", 2.0, 0.0, 1.0, 0.0, 0.0, 0.0),
     ("front_oncoming", 2.0, 0.0, 1.0, -1.0, 0.0, 0.0),
     ("cross_yneg_to_path", 2.0, -1.0, 1.0, 0.0, 1.0, 0.0),
+    ("cross_ypos_to_path", 2.0, 1.0, 1.0, 0.0, -1.0, 0.0),
+    ("side_static_ypos", 2.0, 1.0, 1.0, 0.0, 0.0, 0.0),
 ]
 
 

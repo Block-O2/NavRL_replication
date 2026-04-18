@@ -2681,6 +2681,104 @@ summary 结果：
 2. 把 rollout summary 做成一张稳定表。
 3. 尝试接 Isaac eval 或真实传感器链路，避免在文本 stub 上过度优化。
 
+### ROS2 rollout 扩展到 5 个动态障碍 case
+
+目的：
+
+- 上一版短闭环只有两个 case，覆盖太窄。
+- 将 rollout case 扩展到与单步 scan 一致的 5 个输入：
+  - `front_static`
+  - `front_oncoming`
+  - `cross_yneg_to_path`
+  - `cross_ypos_to_path`
+  - `side_static_ypos`
+
+脚本更新：
+
+```text
+ros2/tools/run_policy_stub_rollout.py
+```
+
+运行：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+
+/home/ubuntu/miniconda3/envs/NavRL/bin/python \
+  /home/ubuntu/projects/NavRL/ros2/tools/run_policy_stub_rollout.py \
+  --output /home/ubuntu/projects/NavRL/ros2/tools/policy_stub_rollout_20260418.csv \
+  --domain-start 170 \
+  --steps 60 \
+  --dt 0.1
+```
+
+检查：
+
+```text
+rollout_rows=900
+blank_cmd_rows=0
+summary_rows=15
+Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate: 未命中
+```
+
+summary：
+
+| case | policy | status | reached | collision | timeout | goal dist | min clearance |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| front_static | author | timeout | 0 | 0 | 1 | 2.856 | 0.886 |
+| front_static | own1500 | timeout | 0 | 0 | 1 | 2.327 | 0.631 |
+| front_static | dynstopfinal | timeout | 0 | 0 | 1 | 2.856 | 1.082 |
+| front_oncoming | author | collision | 1 | 1 | 0 | 0.918 | -0.691 |
+| front_oncoming | own1500 | collision | 1 | 1 | 0 | 0.978 | -0.805 |
+| front_oncoming | dynstopfinal | collision | 1 | 1 | 0 | 0.998 | -0.789 |
+| cross_yneg_to_path | author | collision | 1 | 1 | 0 | 0.942 | -0.399 |
+| cross_yneg_to_path | own1500 | reached | 1 | 0 | 0 | 0.979 | 0.064 |
+| cross_yneg_to_path | dynstopfinal | reached | 1 | 0 | 0 | 0.944 | 0.051 |
+| cross_ypos_to_path | author | reached | 1 | 0 | 0 | 0.920 | 0.064 |
+| cross_ypos_to_path | own1500 | reached | 1 | 0 | 0 | 0.965 | 0.016 |
+| cross_ypos_to_path | dynstopfinal | reached | 1 | 0 | 0 | 0.971 | 0.064 |
+| side_static_ypos | author | reached | 1 | 0 | 0 | 0.979 | 0.647 |
+| side_static_ypos | own1500 | timeout | 0 | 0 | 1 | 1.093 | 0.987 |
+| side_static_ypos | dynstopfinal | reached | 1 | 0 | 0 | 0.974 | 0.872 |
+
+按 policy 汇总：
+
+```text
+author:       reached=2, collision=2, timeout=1
+own1500:      reached=2, collision=1, timeout=2
+dynstopfinal: reached=3, collision=1, timeout=1
+```
+
+观察：
+
+- `front_static` 三者都不碰撞，但 6 秒内都没到 goal range；说明 horizon 太短或绕行过大。
+- `front_oncoming` 三者都 collision，是当前文本闭环中最危险的 case。
+- `cross_yneg_to_path` 中作者 checkpoint collision，两个自训练 checkpoint reached。
+- `cross_ypos_to_path` 三者都 reached，但 `own1500` clearance 很小。
+- `side_static_ypos` 中 `dynstopfinal` 和作者 reached，`own1500` timeout。
+
+当前谨慎结论：
+
+- 在这组简化 ROS2 文本闭环里，`dynstopfinal` 的 summary 最好：
+  - reached 3/5；
+  - collision 1/5；
+  - timeout 1/5。
+- 但这个结论不能外推到真实仿真或真机，因为：
+  - 动态障碍来自 stub；
+  - 没有真实感知；
+  - 没有真实动力学；
+  - 没有控制延迟；
+  - 没有多障碍、多 seed。
+- 它的价值是：证明 `dynstopfinal` 在作者 ROS2 `navigation_node.py` 输入/输出路径下不只是能加载，还在若干受控闭环场景里表现出合理避障趋势。
+
+下一步：
+
+- 若继续 ROS2 文本路线：增加多 seed、多障碍和轨迹图。
+- 若继续复现主线：优先尝试真实/合成 depth 或 pointcloud 输入，让 `dynamic_detector_node` 和 `occupancy_map_node` 不再只是空图/stub。
+
 ## 2026-04-18 Policy 备份到 GitHub
 
 目的：
