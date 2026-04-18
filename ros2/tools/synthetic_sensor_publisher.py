@@ -28,24 +28,33 @@ class SyntheticSensorPublisher(Node):
         self.detector_pose_pub = self.create_publisher(PoseStamped, "/mavros/local_position/pose", 10)
         self.yolo_pub = self.create_publisher(Detection2DArray, "yolo_detector/detected_bounding_boxes", 10)
 
-        self.depth_data = self.make_depth_data()
+        self.start_time = time.monotonic()
+        self.depth_data = self.make_depth_data(*self.patch_center(0.0))
         self.color_data = bytes(args.width * args.height * 3)
         self.cloud_points = self.make_cloud_points()
 
-    def make_depth_data(self):
+    def patch_center(self, elapsed):
+        cx = self.args.width * 0.5 + self.args.patch_x_offset + self.args.patch_x_velocity_px * elapsed
+        cy = self.args.height * 0.5 + self.args.patch_y_offset + self.args.patch_y_velocity_px * elapsed
+        half = self.args.patch_size * 0.5
+        cx = min(max(cx, half), self.args.width - half)
+        cy = min(max(cy, half), self.args.height - half)
+        return cx, cy
+
+    def make_depth_data(self, cx, cy):
         data = array.array("H", [self.args.depth_mm] * (self.args.width * self.args.height))
         patch_half = self.args.patch_size // 2
-        cx = self.args.width // 2
-        cy = self.args.height // 2
-        for y in range(cy - patch_half, cy + patch_half):
+        cx_int = int(round(cx))
+        cy_int = int(round(cy))
+        for y in range(cy_int - patch_half, cy_int + patch_half):
             if y < 0 or y >= self.args.height:
                 continue
-            for x in range(cx - patch_half, cx + patch_half):
+            for x in range(cx_int - patch_half, cx_int + patch_half):
                 if 0 <= x < self.args.width:
                     data[y * self.args.width + x] = self.args.patch_depth_mm
         return data.tobytes()
 
-    def make_depth_msg(self, stamp):
+    def make_depth_msg(self, stamp, patch_center):
         msg = Image()
         msg.header.stamp = stamp
         msg.header.frame_id = "map"
@@ -54,7 +63,10 @@ class SyntheticSensorPublisher(Node):
         msg.encoding = "16UC1"
         msg.is_bigendian = False
         msg.step = self.args.width * 2
-        msg.data = self.depth_data
+        if self.args.patch_x_velocity_px or self.args.patch_y_velocity_px:
+            msg.data = self.make_depth_data(*patch_center)
+        else:
+            msg.data = self.depth_data
         return msg
 
     def make_color_msg(self, stamp):
@@ -97,7 +109,9 @@ class SyntheticSensorPublisher(Node):
 
     def publish_once(self):
         stamp = self.get_clock().now().to_msg()
-        depth = self.make_depth_msg(stamp)
+        elapsed = time.monotonic() - self.start_time
+        patch_center = self.patch_center(elapsed)
+        depth = self.make_depth_msg(stamp, patch_center)
         color = self.make_color_msg(stamp)
         pose = self.make_pose_msg(stamp)
         cloud = self.make_cloud_msg(stamp)
@@ -114,16 +128,16 @@ class SyntheticSensorPublisher(Node):
         detections.header.stamp = stamp
         detections.header.frame_id = "map"
         if self.args.yolo_box:
-            detections.detections.append(self.make_yolo_detection())
+            detections.detections.append(self.make_yolo_detection(patch_center))
         self.yolo_pub.publish(detections)
 
-    def make_yolo_detection(self):
+    def make_yolo_detection(self, patch_center):
         detection = Detection2D()
         box_size = self.args.yolo_box_size or self.args.patch_size
         box_width = self.args.yolo_box_width or box_size
         box_height = self.args.yolo_box_height or box_size
-        x0 = max(0.0, self.args.width * 0.5 - box_width * 0.5 + self.args.yolo_box_x_offset)
-        y0 = max(0.0, self.args.height * 0.5 - box_height * 0.5 + self.args.yolo_box_y_offset)
+        x0 = max(0.0, patch_center[0] - box_width * 0.5 + self.args.yolo_box_x_offset)
+        y0 = max(0.0, patch_center[1] - box_height * 0.5 + self.args.yolo_box_y_offset)
         detection.bbox.center.position.x = float(min(x0, self.args.width - 1))
         detection.bbox.center.position.y = float(min(y0, self.args.height - 1))
         detection.bbox.size_x = float(min(box_width, self.args.width))
@@ -140,6 +154,10 @@ def parse_args():
     parser.add_argument("--depth-mm", type=int, default=5000)
     parser.add_argument("--patch-depth-mm", type=int, default=2000)
     parser.add_argument("--patch-size", type=int, default=80)
+    parser.add_argument("--patch-x-offset", type=float, default=0.0, help="Initial depth patch x offset from image center in pixels.")
+    parser.add_argument("--patch-y-offset", type=float, default=0.0, help="Initial depth patch y offset from image center in pixels.")
+    parser.add_argument("--patch-x-velocity-px", type=float, default=0.0, help="Depth patch horizontal velocity in pixels per second.")
+    parser.add_argument("--patch-y-velocity-px", type=float, default=0.0, help="Depth patch vertical velocity in pixels per second.")
     parser.add_argument("--cloud-x", type=float, default=2.0)
     parser.add_argument("--cloud-side", type=int, default=5)
     parser.add_argument("--cloud-spacing", type=float, default=0.2)

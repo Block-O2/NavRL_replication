@@ -3245,3 +3245,153 @@ angular.z=0.0
 1. 固定 moving obstacle 合成输入，验证 detector 的运动分类分支，而不只是 YOLO/person 直通分支。
 2. 对照作者 launch/param，列出真机前必须满足的 topic、frame、service、checkpoint、速度限制清单。
 3. 如果要进一步靠近复现结果，应该做一个短 closed-loop e2e rollout，把 detector service 替代原来的 `dynamic_obstacle_stub.py`，输出 CSV 而不是只抓一次 topic。
+
+## 2026-04-18 ROS2 dynamic detector 运动分类分支诊断
+
+目的：
+
+- 区分两条 dynamic obstacle 路径：
+  - YOLO/person 直通路径：`is_human -> dynamicBBoxesTemp`
+  - motion classification 路径：历史点云/box 速度/voting/consistency
+- 验证当前合成输入是否足够触发作者的 motion classification 分支。
+
+工具调整：
+
+- 文件：`ros2/tools/synthetic_sensor_publisher.py`
+- 新增默认关闭参数：
+
+```text
+--patch-x-offset
+--patch-y-offset
+--patch-x-velocity-px
+--patch-y-velocity-px
+```
+
+作用：
+
+- 允许 depth patch 在图像平面移动。
+- `--yolo-box` 打开时，YOLO 框会跟随当前 patch center。
+- 不加这些参数时，已有 static depth/YOLO 行为不变。
+
+回归检查：
+
+```bash
+ROS_DOMAIN_ID=201 ros2/tools/run_synthetic_detector_preflight.sh \
+  /home/ubuntu/projects/NavRL/runs/ros2_synthetic_detector_preflight_after_moving_patch_20260418
+```
+
+结果：
+
+```text
+/onboard_detector/get_dynamic_obstacles:
+position=[(2.124, -0.003, 1.103)]
+velocity=[(0.0, 0.0, 0.0)]
+size=[(0.437, 0.811, 0.825)]
+```
+
+说明移动 patch 改动没有破坏已验证的 static YOLO/person 直通链路。
+
+运动分类测试 1：移动 patch，无 YOLO
+
+核心参数：
+
+```text
+--depth-mm 0
+--patch-depth-mm 2000
+--patch-size 160
+--patch-x-offset -200
+--patch-x-velocity-px 50
+```
+
+结果：
+
+```text
+/onboard_detector/filtered_bboxes: 非空
+/onboard_detector/dynamic_bboxes: markers=[]
+/onboard_detector/get_dynamic_obstacles: position=[], velocity=[], size=[]
+```
+
+解释：
+
+- depth patch 被检测到，但未进入 dynamic 输出。
+
+运动分类测试 2：较慢移动，避免目标过早到图像边界
+
+核心参数：
+
+```text
+--patch-x-offset -150
+--patch-x-velocity-px 30
+```
+
+结果：
+
+```text
+/onboard_detector/tracked_bboxes:
+text: ' Vx 0.000000 Vy -0.146178'
+
+/onboard_detector/dynamic_bboxes: markers=[]
+/onboard_detector/get_dynamic_obstacles: position=[], velocity=[], size=[]
+```
+
+解释：
+
+- tracking 已经形成，且速度估计接近默认阈值 `dynamic_velocity_threshold=0.15`。
+- 因为 `|Vy|` 略低于阈值，dynamic 为空是合理的。
+
+运动分类测试 3：稍快移动，默认 detector 阈值
+
+核心参数：
+
+```text
+--patch-x-offset -150
+--patch-x-velocity-px 35
+```
+
+结果：
+
+```text
+/onboard_detector/tracked_bboxes:
+text: ' Vx 0.000000 Vy -0.185654'
+
+/onboard_detector/dynamic_bboxes: markers=[]
+/onboard_detector/get_dynamic_obstacles: position=[], velocity=[], size=[]
+```
+
+解释：
+
+- tracked box 速度已经超过默认 `dynamic_velocity_threshold=0.15`。
+- 仍然没有 dynamic 输出，说明卡点不是单纯速度阈值。
+
+运动分类测试 4：诊断性放宽阈值
+
+额外 detector 参数：
+
+```text
+-p dynamic_velocity_threshold:=0.05
+-p dynamic_voting_threshold:=0.0
+-p dynamic_consistency_threshold:=1
+-p maximum_skip_ratio:=2.0
+```
+
+结果：
+
+```text
+/onboard_detector/tracked_bboxes:
+text: ' Vx 0.000000 Vy -0.185879'
+
+/onboard_detector/dynamic_bboxes: markers=[]
+/onboard_detector/get_dynamic_obstacles: position=[], velocity=[], size=[]
+```
+
+结论：
+
+- 合成 moving depth patch 能触发 depth -> filtered -> tracked。
+- 但即使 tracked velocity 非零且超过默认速度阈值，当前简化合成输入仍不能触发 motion classification 输出。
+- 这说明作者 motion classification 分支依赖更细的点云历史/点对应关系，而不是只看 bbox 速度。
+- 当前服务器上可稳定自动验证的是 YOLO/person 直通动态障碍路径，不应把 moving patch 失败解释为 ROS2 detector 整体不可用。
+
+后续判断：
+
+- 真机或更真实仿真里，YOLO/person 路径可能是主要动态障碍来源；motion-only 分支需要真实深度点云连续性才更有意义。
+- 如果后续一定要验证 motion classification，应优先用 rosbag/真实深度序列，而不是过度拟合这个简化 synthetic patch。
