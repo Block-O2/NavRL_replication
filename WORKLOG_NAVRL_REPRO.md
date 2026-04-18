@@ -3113,3 +3113,135 @@ runs/ros2_dynamic_detector_patch_yolo_aligned_20260418/
 1. 把 `navigation_node.py` 接到这个非空 detector service，做一次 `policy + safe_action + detector service` 的端到端 ROS2 文本预检。
 2. 再考虑 moving patch / moving YOLO box，验证 detector 运动分类分支，而不是只验证 YOLO/person 直通分支。
 3. 真机前还需要确认真实相机/雷达 topic、TF/外参、`safe_action_node` 输入单位和机器人速度限幅。
+
+## 2026-04-18 ROS2 端到端合成预检：policy + detector + safe action
+
+目的：
+
+- 把上一节已经非空的 `onboard_detector` service 接入 `navigation_node.py`。
+- 验证作者 ROS2 主链路在服务器上能从合成传感器输入一路跑到 `/unitree_go2/cmd_vel`。
+- 验证对象包括：
+  - `map_manager/occupancy_map_node`
+  - `onboard_detector/dynamic_detector_node`
+  - `navigation_runner/navigation_node.py`
+  - `navigation_runner/safe_action_node`
+  - `synthetic_sensor_publisher.py`
+
+新增脚本：
+
+```text
+ros2/tools/run_synthetic_e2e_preflight.sh
+```
+
+脚本行为：
+
+- 启动 `occupancy_map_node`；
+- 启动 `safe_action_node`；
+- 启动 `dynamic_detector_node`；
+- 启动 `navigation_node.py`，并打开 `debug_action_topics:=true`；
+- 发布合成 depth/color/pose/YOLO；
+- 发布 `/unitree_go2/odom` 和 `/goal_pose`；
+- 抓取：
+  - `/onboard_detector/get_dynamic_obstacles`
+  - `/navigation_runner/debug/raw_cmd_vel_world`
+  - `/navigation_runner/debug/safe_cmd_vel_world`
+  - `/unitree_go2/cmd_vel`
+
+默认 checkpoint：
+
+```text
+ros2/navigation_runner/scripts/ckpts/navrl_checkpoint.pt
+```
+
+可通过环境变量切换 checkpoint：
+
+```bash
+NAVRL_CHECKPOINT_FILE=/abs/path/to/checkpoint.pt \
+ROS_DOMAIN_ID=200 \
+ros2/tools/run_synthetic_e2e_preflight.sh /tmp/out_dir
+```
+
+作者 checkpoint 预检结果：
+
+```bash
+ROS_DOMAIN_ID=199 ros2/tools/run_synthetic_e2e_preflight.sh \
+  /home/ubuntu/projects/NavRL/runs/ros2_synthetic_e2e_preflight_script_20260418
+```
+
+关键输出：
+
+```text
+detector service:
+position=[(2.124, -0.003, 1.103)]
+velocity=[(0.0, 0.0, 0.0)]
+size=[(0.437, 0.811, 0.825)]
+
+raw policy action:
+x=0.1498, y=0.2319, z=0.4020
+
+safe action:
+x=0.1498, y=0.2319, z=0.0
+
+/unitree_go2/cmd_vel:
+linear.x=0.1498
+linear.y=0.2319
+linear.z=0.0
+angular.z=0.0
+```
+
+解释：
+
+- `navigation_node.py` 成功加载默认作者 checkpoint。
+- `dynamic_detector_node` 返回非空动态障碍。
+- policy 产生 raw action。
+- `safe_action_node` 返回 safe action；由于 navigation 当前 `height_control=False`，最终 `/cmd_vel` 的 `linear.z` 被置为 0。
+
+自训练 `dynstopfinal` checkpoint 预检结果：
+
+```bash
+ROS_DOMAIN_ID=200 \
+NAVRL_CHECKPOINT_FILE=/home/ubuntu/projects/NavRL/policies/dynstopfinal_20260418/checkpoint_final.pt \
+ros2/tools/run_synthetic_e2e_preflight.sh \
+  /home/ubuntu/projects/NavRL/runs/ros2_synthetic_e2e_preflight_dynstopfinal_20260418
+```
+
+关键输出：
+
+```text
+navigation log:
+Checkpoint: /home/ubuntu/projects/NavRL/policies/dynstopfinal_20260418/checkpoint_final.pt
+Model load successfully.
+
+detector service:
+position=[(2.124, -0.003, 1.103)]
+velocity=[(0.0, 0.0, 0.0)]
+size=[(0.437, 0.811, 0.825)]
+
+raw policy action:
+x=0.1988, y=0.3351, z=-0.0439
+
+safe action:
+x=0.1988, y=0.3351, z=-0.0439
+
+/unitree_go2/cmd_vel:
+linear.x=0.1988
+linear.y=0.3351
+linear.z=0.0
+angular.z=0.0
+```
+
+结论：
+
+- 作者默认 policy 和我们备份的 `dynstopfinal` policy 都能进入同一条 ROS2 端到端链路。
+- 当前服务器上已经能文本验证：
+  - synthetic sensors -> map/detector；
+  - detector service -> navigation dynamic obstacle；
+  - navigation policy -> raw action；
+  - safe_action -> final cmd_vel。
+- 这仍然不是“真机可上”的结论，因为输入是合成的，且没有真实相机、雷达、TF、机器人底盘反馈。
+
+下一步计划：
+
+1. 固定 moving obstacle 合成输入，验证 detector 的运动分类分支，而不只是 YOLO/person 直通分支。
+2. 对照作者 launch/param，列出真机前必须满足的 topic、frame、service、checkpoint、速度限制清单。
+3. 如果要进一步靠近复现结果，应该做一个短 closed-loop e2e rollout，把 detector service 替代原来的 `dynamic_obstacle_stub.py`，输出 CSV 而不是只抓一次 topic。
