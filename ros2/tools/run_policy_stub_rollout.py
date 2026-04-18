@@ -268,24 +268,63 @@ def parse_args():
     parser.add_argument("--startup-wait", type=float, default=8.0)
     parser.add_argument("--dt", type=float, default=0.1)
     parser.add_argument("--steps", type=int, default=60)
+    parser.add_argument("--robot-radius", type=float, default=0.3)
+    parser.add_argument("--obstacle-size-xy", type=float, default=0.8)
+    parser.add_argument("--reach-distance", type=float, default=1.0)
+    parser.add_argument("--summary-output", default="")
     return parser.parse_args()
+
+
+def summarize_rollout(rows, robot_radius, obstacle_size_xy, reach_distance):
+    final = rows[-1]
+    obs_radius = math.sqrt(obstacle_size_xy**2 + obstacle_size_xy**2) / 2.0
+    min_obs = min(float(row["obs_dist_2d"]) for row in rows)
+    min_clearance = min_obs - robot_radius - obs_radius
+    final_goal_dist = float(final["goal_dist_2d"])
+    reached = final_goal_dist <= reach_distance
+    collision = min_clearance <= 0.0
+    if collision:
+        status = "collision"
+    elif reached:
+        status = "reached"
+    else:
+        status = "timeout"
+    return {
+        "case": final["case"],
+        "policy": final["policy"],
+        "status": status,
+        "reached": int(reached),
+        "collision": int(collision),
+        "timeout": int(not reached and not collision),
+        "final_x": float(final["agent_x"]),
+        "final_y": float(final["agent_y"]),
+        "goal_dist_2d": final_goal_dist,
+        "min_obs_dist_2d": min_obs,
+        "min_clearance_2d": min_clearance,
+        "robot_radius": robot_radius,
+        "obs_radius": obs_radius,
+    }
 
 
 def main():
     args = parse_args()
     all_rows = []
+    summary_rows = []
     domain_id = args.domain_start
     for case in CASES:
         for policy_name, checkpoint in POLICIES:
             print(f"[rollout] case={case[0]} policy={policy_name} domain={domain_id}", flush=True)
             rows = run_rollout(policy_name, checkpoint, case, domain_id, args.startup_wait, args.dt, args.steps)
             all_rows.extend(rows)
-            final = rows[-1]
-            min_obs = min(float(row["obs_dist_2d"]) for row in rows)
+            summary = summarize_rollout(rows, args.robot_radius, args.obstacle_size_xy, args.reach_distance)
+            summary_rows.append(summary)
             print(
                 f"[rollout] final case={case[0]} policy={policy_name} "
-                f"agent=({final['agent_x']:.3f},{final['agent_y']:.3f}) "
-                f"goal_dist={final['goal_dist_2d']:.3f} min_obs={min_obs:.3f}",
+                f"agent=({summary['final_x']:.3f},{summary['final_y']:.3f}) "
+                f"goal_dist={summary['goal_dist_2d']:.3f} "
+                f"min_obs={summary['min_obs_dist_2d']:.3f} "
+                f"clearance={summary['min_clearance_2d']:.3f} "
+                f"status={summary['status']}",
                 flush=True,
             )
             domain_id += 1
@@ -297,6 +336,13 @@ def main():
         writer.writeheader()
         writer.writerows(all_rows)
     print(f"[rollout] wrote {output}")
+
+    summary_output = Path(args.summary_output) if args.summary_output else output.with_name(output.stem + "_summary.csv")
+    with summary_output.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(summary_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(summary_rows)
+    print(f"[rollout] wrote {summary_output}")
 
 
 if __name__ == "__main__":

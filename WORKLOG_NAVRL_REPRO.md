@@ -2583,6 +2583,104 @@ Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate: 未命中
   - 轨迹 CSV 汇总脚本。
 - 如果想更接近论文复现，下一阶段应回到 Isaac eval 或真实仿真，而不是无限扩展文本 stub。
 
+### ROS2 rollout 增加 reach / collision 判定
+
+目的：
+
+- 上一版 rollout 只有 final position、goal distance、min obstacle distance。
+- 新版额外生成 summary CSV，加入简化几何判定：
+  - `reached`
+  - `collision`
+  - `timeout`
+  - `min_clearance_2d`
+
+脚本更新：
+
+```text
+ros2/tools/run_policy_stub_rollout.py
+```
+
+新增参数：
+
+```text
+--robot-radius 0.3
+--obstacle-size-xy 0.8
+--reach-distance 1.0
+--summary-output <path>
+```
+
+默认计算：
+
+```text
+obs_radius = sqrt(0.8^2 + 0.8^2) / 2 = 0.5657
+min_clearance_2d = min_obs_dist_2d - robot_radius - obs_radius
+collision = min_clearance_2d <= 0
+reached = final_goal_dist <= 1.0
+```
+
+注意：
+
+- 这仍是简化 2D 几何判定。
+- collision 优先级高于 reached；如果轨迹中擦到障碍但最后进了 goal range，状态记为 `collision`。
+
+运行命令：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/projects/navrl_ros2_ws/install/setup.bash
+export PATH=/home/ubuntu/miniconda3/envs/NavRL/bin:$PATH
+export ROS_LOG_DIR=/home/ubuntu/projects/navrl_ros2_ws/log/ros
+
+/home/ubuntu/miniconda3/envs/NavRL/bin/python \
+  /home/ubuntu/projects/NavRL/ros2/tools/run_policy_stub_rollout.py \
+  --output /home/ubuntu/projects/NavRL/ros2/tools/policy_stub_rollout_20260418.csv \
+  --domain-start 150 \
+  --steps 60 \
+  --dt 0.1
+```
+
+输出：
+
+```text
+ros2/tools/policy_stub_rollout_20260418.csv
+ros2/tools/policy_stub_rollout_20260418_summary.csv
+```
+
+检查：
+
+```text
+rows=360
+blank_cmd_rows=0
+Traceback|ERROR|Error|Exception|failed|Aborted|Segmentation|terminate: 未命中
+```
+
+summary 结果：
+
+| case | policy | status | reached | collision | final x | final y | goal dist | min obs dist | min clearance |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| front_oncoming | author | collision | 1 | 1 | 4.163 | 0.381 | 0.920 | 0.164 | -0.702 |
+| front_oncoming | own1500 | collision | 1 | 1 | 4.019 | 0.062 | 0.983 | 0.060 | -0.806 |
+| front_oncoming | dynstopfinal | collision | 1 | 1 | 4.013 | 0.147 | 0.997 | 0.076 | -0.789 |
+| cross_yneg_to_path | author | collision | 1 | 1 | 4.132 | 0.419 | 0.964 | 0.512 | -0.354 |
+| cross_yneg_to_path | own1500 | reached | 1 | 0 | 4.026 | 0.056 | 0.976 | 0.927 | 0.062 |
+| cross_yneg_to_path | dynstopfinal | reached | 1 | 0 | 4.062 | 0.105 | 0.943 | 0.915 | 0.050 |
+
+解释：
+
+- `front_oncoming` 在当前简化闭环中，三组 checkpoint 都会发生几何 collision。
+- 这说明这个 case 不能用来证明任何 policy 足够安全。
+- `cross_yneg_to_path` 中：
+  - 作者 checkpoint 在该简化闭环里 collision；
+  - `own1500` 和 `dynstopfinal` 都 reached，且 min clearance 略为正；
+  - 两者 clearance 都不大，因此仍不能作为真机安全证据。
+- 这个结果比单步 action probe 更接近闭环，但仍不等价于真实仿真或实机。
+
+当前服务器侧最有价值的下一步：
+
+1. 增加更多 rollout cases 和重复 seeds。
+2. 把 rollout summary 做成一张稳定表。
+3. 尝试接 Isaac eval 或真实传感器链路，避免在文本 stub 上过度优化。
+
 ## 2026-04-18 Policy 备份到 GitHub
 
 目的：
