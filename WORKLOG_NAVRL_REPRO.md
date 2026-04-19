@@ -35,7 +35,7 @@
 - `[done]` 收敛到 policy 复现主线：确认候选 policy、固定评估命令、输出可解释结果。
 - `[done]` 用固定 evaluator 做干净复跑，并把表格作为当前复现结论。
 - `[done]` 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
-- `[done]` 新增干净 Isaac eval-only 入口，并完成三档 CPU eval matrix、小规模 GPU eval 诊断。
+- `[done]` 新增干净 Isaac eval-only 入口，并完成四档 CPU eval matrix、小规模 GPU eval 诊断。
 - `[next]` 评估是否需要继续训练；如果继续，应基于 `dynstopfinal` 或同类 reward 设计，而不是原始 reward 盲目加长。
 - `[next]` 继续把 Isaac eval 扩大到更接近作者口径；GPU 路线必须先处理 reset / Direct GPU API 报错。
 - `[optional]` ROS2/真机部署只保留为附录和后续工作，不再压过 policy 训练与验证主线。
@@ -1972,6 +1972,142 @@ NO_CLOSE_EXIT
 - 继续盲目加长 `dynstopfinal` 训练不够有根据。
 - 更有价值的是回到作者思路：确认作者原始训练是否依赖更长训练、更大 eval、外部 safety/gating，还是当前 reward ablation 引入了分布偏移。
 - 如果继续训练，应考虑更接近作者完整系统的目标，而不是只围绕 `dynamic_stop_penalty` 单点优化。
+
+### eval no-render 文本评估开关
+
+目的：
+
+- 原始 `utils.evaluate()` 会强制 `env.enable_render(True)`，并生成 `wandb.Video`。
+- 当前复现主线需要的是文本指标，不需要视频。
+- 为了让更大 CPU eval 可承受，增加一个默认不改变原行为的可选开关。
+
+调整文件：
+
+```text
+isaac-training/training/scripts/utils.py
+```
+
+行为：
+
+- 默认不传参数时，仍保持原来的 render/video 行为。
+- 传入：
+
+```text
++eval_render=False
+```
+
+时：
+
+- 不创建 `RenderCallback`；
+- 不生成 `wandb.Video`；
+- 仍然执行同样的 rollout；
+- 仍然输出 `[EVAL-STATS-RAW]` 和 `[EVAL-JSON]`。
+
+小规模验证：
+
+```text
+device=cpu
+sim.device=cpu
+sim.use_gpu=False
+sim.use_gpu_pipeline=False
+env.num_envs=16
+env.num_obstacles=40
+env_dyn.num_obstacles=10
+env.max_episode_length=300
++eval_render=False
+checkpoint=dynstopfinal
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_cpu_norender_smoke_16_40_10_300_20260419
+```
+
+结果：
+
+```text
+[EVAL-JSON] {"eval/stats.collision": 0.0, "eval/stats.episode_len": 300.0, "eval/stats.reach_goal": 0.0625, "eval/stats.return": 1573.316650390625, "eval/stats.truncated": 1.0}
+NO_CLOSE_EXIT
+```
+
+解释：
+
+- no-render 路径保留了文本指标。
+- 日志中没有 `Rendering:` 进度和视频记录。
+- 这只用于评估加速，不改变 policy、reward、环境 step 或 checkpoint。
+
+### 作者障碍数量 CPU no-render eval matrix
+
+目的：
+
+- 在 CPU eval 稳定可用的前提下，把静态/动态障碍数量调到作者式配置：
+  - `env.num_obstacles=350`
+  - `env_dyn.num_obstacles=80`
+- 并行环境数仍低于作者式 `1024`，本次为 `256`。
+- episode 长度为 `800`，低于默认 `2200`。
+- 这是目前最接近作者障碍规模的一张干净 CPU 指标表。
+
+配置：
+
+```text
+device=cpu
+sim.device=cpu
+sim.use_gpu=False
+sim.use_gpu_pipeline=False
+env.num_envs=256
+env.num_obstacles=350
+env_dyn.num_obstacles=80
+env.max_episode_length=800
++eval_render=False
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_cpu_norender_matrix_256_350_80_800_20260419
+```
+
+结果：
+
+```text
+author:
+[EVAL-JSON] {"eval/stats.collision": 0.17578125, "eval/stats.episode_len": 751.9140625, "eval/stats.reach_goal": 0.265625, "eval/stats.return": 3902.00634765625, "eval/stats.truncated": 0.81640625}
+NO_CLOSE_EXIT
+
+own1500:
+[EVAL-JSON] {"eval/stats.collision": 0.203125, "eval/stats.episode_len": 736.4609375, "eval/stats.reach_goal": 0.19921875, "eval/stats.return": 3676.824951171875, "eval/stats.truncated": 0.79296875}
+NO_CLOSE_EXIT
+
+dynstopfinal:
+[EVAL-JSON] {"eval/stats.collision": 0.265625, "eval/stats.episode_len": 725.0546875, "eval/stats.reach_goal": 0.234375, "eval/stats.return": 3795.57421875, "eval/stats.truncated": 0.73828125}
+NO_CLOSE_EXIT
+```
+
+解释：
+
+- 三个 checkpoint 都能在作者障碍数量的 CPU no-render eval 中完整跑完。
+- 作者 checkpoint 在这一档同时拥有最高 reach_goal、最高 return、最低 collision：
+  - reach_goal `0.265625`
+  - return `3902.0063`
+  - collision `0.17578125`
+- `dynstopfinal` 相比 `own1500`：
+  - reach_goal 更高：`0.234375` vs `0.19921875`
+  - return 更高：`3795.5742` vs `3676.8250`
+  - 但 collision 更高：`0.265625` vs `0.203125`
+- 当前最强结论：
+  - 自训练候选确实学到了一部分导航/避障能力；
+  - `dynamic_stop_penalty` 对 quick-demo 动态横穿有效；
+  - 但在更接近作者障碍数量的 Isaac eval 中，自训练候选仍明显落后于作者 checkpoint，尤其 collision。
+- 因此当前还不能宣称“自己的 policy 已经复现作者效果”。
+
+下一步判断：
+
+- 如果目标是论文/作者效果复现，下一步不应继续围绕 `dynstopfinal` 单点加训。
+- 更合理路线：
+  - 要么修 GPU eval，跑更接近 `1024 / 350 / 80 / 2200` 的正式评估；
+  - 要么回到作者部署逻辑，把作者 checkpoint 与自训练 checkpoint 接入 ROS2/safe_action/gating 做端到端对照；
+  - 要么基于作者 checkpoint 反推评估口径，确认 reach/collision 在当前 Isaac eval 中是否和作者实际使用的指标一致。
 
 ### 小规模 GPU Isaac eval 诊断
 

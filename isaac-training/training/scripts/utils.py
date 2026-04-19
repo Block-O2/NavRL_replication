@@ -166,11 +166,12 @@ def evaluate(
     exploration_type: ExplorationType=ExplorationType.MEAN
 ):
 
-    env.enable_render(True)
+    eval_render = bool(cfg.get("eval_render", True))
+    env.enable_render(eval_render)
     env.eval()
     env.set_seed(seed)
 
-    render_callback = RenderCallback(interval=2)
+    render_callback = RenderCallback(interval=2) if eval_render else None
     
     with set_exploration_type(exploration_type):
         trajs = env.rollout(
@@ -204,12 +205,12 @@ def evaluate(
 
     print(f"[EVAL-STATS-RAW] {info}", flush=True)
 
-    # log video
-    info["recording"] = wandb.Video(
-        render_callback.get_video_array(axes="t c h w"), 
-        fps=0.5 / (cfg.sim.dt * cfg.sim.substeps), 
-        format="mp4"
-    )
+    if render_callback is not None:
+        info["recording"] = wandb.Video(
+            render_callback.get_video_array(axes="t c h w"), 
+            fps=0.5 / (cfg.sim.dt * cfg.sim.substeps), 
+            format="mp4"
+        )
     env.train()
     # env.reset()
 
@@ -264,4 +265,3 @@ def construct_input(start, end):
     for n in range(start, end):
         input.append(f"{n}")
     return "(" + "|".join(input) + ")"
-
