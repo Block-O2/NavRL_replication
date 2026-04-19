@@ -1958,6 +1958,58 @@ PhysX error: PxArticulationLink::setGlobalPose(): it is illegal to call this met
   - policy 候选有效性：优先看 quick-demo 固定 evaluator、trace、CPU Isaac eval；
   - GPU eval 工程问题：单独修 reset / pose update / Direct GPU API 路径。
 
+### GPU no-pipeline 绕行尝试
+
+目的：
+
+- 尝试保留 `cuda:0`，但关闭 `sim.use_gpu_pipeline`，看是否可以绕开 Direct GPU API 的 pose 写入限制。
+
+配置：
+
+```text
+device=cuda:0
+sim.device=cuda:0
+sim.use_gpu=True
+sim.use_gpu_pipeline=False
+env.num_envs=16
+env.num_obstacles=40
+env_dyn.num_obstacles=10
+env.max_episode_length=300
+checkpoint=dynstopfinal
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_gpu_nopipeline_dynstopfinal_diag_16_40_10_300_20260419
+```
+
+结果：
+
+```text
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!
+```
+
+触发位置：
+
+```text
+NavigationEnv(cfg)
+  -> self.drone.initialize()
+  -> self._view.post_reset()
+  -> XFormPrimView.post_reset()
+  -> self.set_world_poses(...)
+  -> omni_drones/views/__init__.py:273
+```
+
+解释：
+
+- 这条配置没有走到 eval rollout；它在 drone initialize / post_reset 阶段就失败。
+- 因此不能把 `sim.use_gpu_pipeline=False` 直接当成 GPU eval 修复方案。
+- 当前可用路线仍是：
+  - CPU eval 用来拿干净 policy 对照；
+  - GPU eval 需要代码级处理 reset / pose 写入路径，或改成全 CPU eval；
+  - 训练主路径继续使用跳过 step-0 eval 的 GPU noeval0 入口。
+
 
 ## 2026-04-18 ROS2 辅助验证附录（压缩版）
 
