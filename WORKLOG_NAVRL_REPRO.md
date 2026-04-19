@@ -37,6 +37,7 @@
 - `[done]` 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
 - `[done]` 新增干净 Isaac eval-only 入口，并完成四档 CPU eval matrix、小规模 GPU eval 诊断。
 - `[done]` 做作者 checkpoint vs `dynstopfinal` 的 ROS2-style / safe_action 端到端离线对照。
+- `[done]` 用真实 ROS2 `navigation_node.py` + `safe_action_node` + synthetic detector 链路分别验证作者 checkpoint 和 `dynstopfinal` 可输出 raw/safe/cmd_vel。
 - `[next]` 评估是否需要继续训练；如果继续，应基于 `dynstopfinal` 或同类 reward 设计，而不是原始 reward 盲目加长。
 - `[next]` 继续把 Isaac eval 扩大到更接近作者口径；GPU 路线必须先处理 reset / Direct GPU API 报错。
 - `[optional]` ROS2/真机部署只保留为附录和后续工作，不再压过 policy 训练与验证主线。
@@ -2277,6 +2278,111 @@ dynstopfinal reach=100/100 static_col=0/100 dynamic_col=0/100 timeout=0/100 min_
 
 - 若继续推进真机前验证，应把这套对照从 Python 近似 safe_action 推到真实 ROS2 `safe_action_node`。
 - 如果继续训练，应针对 head-on 与 Isaac eval 碰撞问题，而不是只优化 path-crossing。
+
+### 真实 ROS2 synthetic e2e preflight
+
+目的：
+
+- 把上一节的 Python 近似 safe_action 进一步推进到真实 ROS2 节点链路。
+- 验证作者 checkpoint 和 `dynstopfinal` 是否都能通过：
+  - `navigation_node.py`
+  - `safe_action_node`
+  - `occupancy_map_node`
+  - `dynamic_detector_node`
+  - synthetic sensor publisher
+- 并抓取：
+  - raw policy action；
+  - safe action；
+  - 最终 `/unitree_go2/cmd_vel`。
+
+使用脚本：
+
+```text
+ros2/tools/run_synthetic_e2e_preflight.sh
+```
+
+作者 checkpoint：
+
+```bash
+ROS_DOMAIN_ID=211 \
+ros2/tools/run_synthetic_e2e_preflight.sh \
+  /home/ubuntu/projects/NavRL/runs/ros2_synthetic_e2e_author_20260419
+```
+
+结果：
+
+```text
+detector obstacle:
+position=(2.124, -0.003, 1.103)
+velocity=(0.0, 0.0, 0.0)
+size=(0.437, 0.811, 0.825)
+
+raw policy action:
+x=0.1497527361
+y=0.2318881750
+z=0.4019677639
+
+safe action:
+x=0.1497527361
+y=0.2318881750
+z=0.0
+
+cmd_vel:
+x=0.1497527361
+y=0.2318881750
+z=0.0
+```
+
+`dynstopfinal`：
+
+```bash
+ROS_DOMAIN_ID=212 \
+NAVRL_CHECKPOINT_FILE=/home/ubuntu/projects/NavRL/policies/dynstopfinal_20260418/checkpoint_final.pt \
+ros2/tools/run_synthetic_e2e_preflight.sh \
+  /home/ubuntu/projects/NavRL/runs/ros2_synthetic_e2e_dynstopfinal_20260419
+```
+
+结果：
+
+```text
+detector obstacle:
+position=(2.124, -0.003, 1.103)
+velocity=(0.0, 0.0, 0.0)
+size=(0.437, 0.811, 0.825)
+
+raw policy action:
+x=0.1987817287
+y=0.3350788355
+z=-0.0439191461
+
+safe action:
+x=0.1987817287
+y=0.3350788355
+z=-0.0439191461
+
+cmd_vel:
+x=0.1987817287
+y=0.3350788355
+z=0.0
+```
+
+解释：
+
+- 两个 checkpoint 都能被真实 ROS2 `navigation_node.py` 加载，并输出动作。
+- 两个 checkpoint 都能通过真实 `safe_action_node` 链路产生 safe action。
+- 在这一个 synthetic 场景里：
+  - 作者 checkpoint 的 raw z 速度较大，safe_action 把 z 压到 0；
+  - `dynstopfinal` 的 raw/safe 基本一致，最终 cmd_vel 仍只发布平面速度。
+- 这一步验证的是“链路可用”和“真实 safe_action service 能参与”，不是 rollout 成功率。
+- 当前场景只有一个 synthetic 静态/准动态障碍，不能代表真机安全性。
+
+下一步：
+
+- 若继续推进真实 ROS2 口径，应做多场景 service-level 对照：
+  - 障碍更近/更偏左/更偏右；
+  - 动态障碍横穿/迎面；
+  - 比较 raw action 与 safe action 的差值。
+- 比起继续离线 Python 近似，真实 ROS2 service-level 扫描更接近上真机前验证。
 
 ### 小规模 GPU Isaac eval 诊断
 
