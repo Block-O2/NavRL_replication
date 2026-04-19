@@ -35,7 +35,7 @@
 - `[done]` 收敛到 policy 复现主线：确认候选 policy、固定评估命令、输出可解释结果。
 - `[done]` 用固定 evaluator 做干净复跑，并把表格作为当前复现结论。
 - `[done]` 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
-- `[done]` 新增干净 Isaac eval-only 入口，并完成小规模 CPU eval、中等 CPU eval matrix、小规模 GPU eval 诊断。
+- `[done]` 新增干净 Isaac eval-only 入口，并完成小规模 CPU eval、两档 CPU eval matrix、小规模 GPU eval 诊断。
 - `[next]` 评估是否需要继续训练；如果继续，应基于 `dynstopfinal` 或同类 reward 设计，而不是原始 reward 盲目加长。
 - `[next]` 继续把 Isaac eval 扩大到更接近作者口径；GPU 路线必须先处理 reset / Direct GPU API 报错。
 - `[optional]` ROS2/真机部署只保留为附录和后续工作，不再压过 policy 训练与验证主线。
@@ -1854,6 +1854,60 @@ NO_CLOSE_EXIT
 - `dynstopfinal` 的 reach_goal 最高，为 `0.125`，但绝对值仍低，且多数 episode truncate。
 - `author` 的 return 最高，但 collision 非零；这说明 return、reach_goal、collision 不能单独看，需要结合作者训练目标理解。
 - 这一步支持把 `dynstopfinal` 继续作为当前自训练主候选，但还不能宣称正式复现成功。
+
+### 更大一档 CPU Isaac eval matrix
+
+目的：
+
+- 在 CPU 路径继续扩大规模，看看结论是否稳定。
+- 这仍然不是作者默认 `1024 / 350 / 80`，但比上一档更接近正式配置。
+
+配置：
+
+```text
+device=cpu
+sim.device=cpu
+sim.use_gpu=False
+sim.use_gpu_pipeline=False
+env.num_envs=64
+env.num_obstacles=160
+env_dyn.num_obstacles=40
+env.max_episode_length=500
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_cpu_matrix_64_160_40_500_20260419
+```
+
+结果：
+
+```text
+author:
+[EVAL-JSON] {"eval/stats.collision": 0.046875, "eval/stats.episode_len": 492.90625, "eval/stats.reach_goal": 0.15625, "eval/stats.return": 2579.117431640625, "eval/stats.truncated": 0.953125}
+NO_CLOSE_EXIT
+
+own1500:
+[EVAL-JSON] {"eval/stats.collision": 0.09375, "eval/stats.episode_len": 483.6875, "eval/stats.reach_goal": 0.09375, "eval/stats.return": 2436.59765625, "eval/stats.truncated": 0.90625}
+NO_CLOSE_EXIT
+
+dynstopfinal:
+[EVAL-JSON] {"eval/stats.collision": 0.03125, "eval/stats.episode_len": 493.890625, "eval/stats.reach_goal": 0.109375, "eval/stats.return": 2551.800537109375, "eval/stats.truncated": 0.96875}
+NO_CLOSE_EXIT
+```
+
+解释：
+
+- 三个 checkpoint 在更大 CPU 配置下仍然都能完整 eval。
+- `dynstopfinal` 仍然是三者里 collision 最低：`0.03125`。
+- `author` 的 reach_goal 和 return 最高：reach_goal `0.15625`，return `2579.1174`。
+- `own1500` 在这一档明显落后：collision `0.09375`、reach_goal `0.09375`。
+- 这说明 `dynstopfinal` 比原始自训练 baseline 更稳，但还没有在 Isaac eval 的 reach / return 上超过作者 checkpoint。
+- 当前最准确表述应该是：
+  - 自训练已经得到一个有用候选；
+  - 动态障碍行为比早期自训练 baseline 明显改善；
+  - 离“按作者口径完整复现”还有差距，尤其是更大规模、GPU eval、真实部署链路。
 
 ### 小规模 GPU Isaac eval 诊断
 
