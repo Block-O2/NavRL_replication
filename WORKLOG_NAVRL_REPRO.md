@@ -2109,6 +2109,64 @@ NO_CLOSE_EXIT
   - 要么回到作者部署逻辑，把作者 checkpoint 与自训练 checkpoint 接入 ROS2/safe_action/gating 做端到端对照；
   - 要么基于作者 checkpoint 反推评估口径，确认 reach/collision 在当前 Isaac eval 中是否和作者实际使用的指标一致。
 
+### 512 并行环境 CPU no-render eval pair
+
+目的：
+
+- 继续逼近作者的 `1024 / 350 / 80` 规模。
+- 为控制耗时，只比较作者 checkpoint 与当前自训练主候选 `dynstopfinal`。
+- 这一步仍然是 CPU eval，不是 GPU 正式 eval。
+
+配置：
+
+```text
+device=cpu
+sim.device=cpu
+sim.use_gpu=False
+sim.use_gpu_pipeline=False
+env.num_envs=512
+env.num_obstacles=350
+env_dyn.num_obstacles=80
+env.max_episode_length=1000
++eval_render=False
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_cpu_norender_pair_512_350_80_1000_20260419
+```
+
+结果：
+
+```text
+author:
+[EVAL-JSON] {"eval/stats.collision": 0.234375, "eval/stats.episode_len": 900.462890625, "eval/stats.reach_goal": 0.31640625, "eval/stats.return": 4909.01513671875, "eval/stats.truncated": 0.75390625}
+NO_CLOSE_EXIT
+
+dynstopfinal:
+[EVAL-JSON] {"eval/stats.collision": 0.310546875, "eval/stats.episode_len": 867.14453125, "eval/stats.reach_goal": 0.23828125, "eval/stats.return": 4751.76904296875, "eval/stats.truncated": 0.6875}
+NO_CLOSE_EXIT
+```
+
+解释：
+
+- `512 / 350 / 80 / 1000` 在 CPU no-render 路径可以跑完。
+- 作者 checkpoint 继续明显领先：
+  - reach_goal 更高：`0.3164` vs `0.2383`
+  - collision 更低：`0.2344` vs `0.3105`
+  - return 更高：`4909.0` vs `4751.8`
+- 这进一步支持当前判断：
+  - 自训练 policy 已经有能力，但还没有达到作者 checkpoint 的 Isaac eval 表现；
+  - `dynstopfinal` 的 quick-demo 动态横穿优势不能外推为作者口径复现成功；
+  - 下一步如果继续追求复现，应优先研究作者 policy/部署/eval 口径，而不是继续加长当前 ablation 训练。
+
+下一步：
+
+- CPU 稳路线最多还可以尝试 `1024 / 350 / 80` 的 no-render eval，但耗时会更高。
+- 更有价值的下一步可能是把作者 checkpoint 和 `dynstopfinal` 接入同一 ROS2-style/safe_action 端到端链路，对比是否外部 safety/gating 缩小差距。
+- GPU eval 修复仍是正式 Isaac 口径的工程缺口。
+
 ### 小规模 GPU Isaac eval 诊断
 
 目的：
