@@ -35,9 +35,9 @@
 - `[done]` 收敛到 policy 复现主线：确认候选 policy、固定评估命令、输出可解释结果。
 - `[done]` 用固定 evaluator 做干净复跑，并把表格作为当前复现结论。
 - `[done]` 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
-- `[done]` 新增干净 Isaac eval-only 入口，并完成一次小规模 CPU eval 验证。
+- `[done]` 新增干净 Isaac eval-only 入口，并完成小规模 CPU eval、中等 CPU eval matrix、小规模 GPU eval 诊断。
 - `[next]` 评估是否需要继续训练；如果继续，应基于 `dynstopfinal` 或同类 reward 设计，而不是原始 reward 盲目加长。
-- `[next]` 研究如何把 Isaac eval 扩大到更接近作者口径，同时避开/修复当前 GPU eval reset 问题。
+- `[next]` 继续把 Isaac eval 扩大到更接近作者口径；GPU 路线必须先处理 reset / Direct GPU API 报错。
 - `[optional]` ROS2/真机部署只保留为附录和后续工作，不再压过 policy 训练与验证主线。
 
 计划会随着新证据调整；不要把这里当作固定路线图。
@@ -1800,9 +1800,109 @@ NO_CLOSE_EXIT
 
 下一步：
 
-1. 尝试中等规模 CPU eval，观察是否仍能稳定输出 stats。
-2. 谨慎测试 GPU eval，只用于定位 reset/Direct GPU API 问题，不把失败混同为 policy 失败。
-3. 如果要得到正式结果，需要接近 `1024 / 350 / 80` 和更长 episode，同时解决 GPU eval/reset 兼容问题。
+1. 继续扩大 Isaac eval 到更接近作者口径。
+2. GPU eval 路线必须优先处理 reset / Direct GPU API 报错。
+3. 如果短期内不能修 GPU eval，则可以先用 CPU eval 做较小规模但更干净的 policy 对照。
+
+### 中等规模 CPU Isaac eval matrix
+
+目的：
+
+- 用同一个干净 Isaac eval-only 入口比较作者 checkpoint、50M baseline 和当前自训练候选。
+- 仍然使用 CPU，是为了绕开 GPU Direct API / reset 问题，先取得干净文本指标。
+- 这一步不是正式论文指标，只是比 quick-demo 更接近训练环境的 Isaac 侧对照。
+
+配置：
+
+```text
+device=cpu
+sim.device=cpu
+sim.use_gpu=False
+sim.use_gpu_pipeline=False
+env.num_envs=32
+env.num_obstacles=80
+env_dyn.num_obstacles=20
+env.max_episode_length=400
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_cpu_matrix_32_80_20_400_20260419
+```
+
+结果：
+
+```text
+author:
+[EVAL-JSON] {"eval/stats.collision": 0.03125, "eval/stats.episode_len": 392.96875, "eval/stats.reach_goal": 0.09375, "eval/stats.return": 2081.90087890625, "eval/stats.truncated": 0.96875}
+NO_CLOSE_EXIT
+
+own1500:
+[EVAL-JSON] {"eval/stats.collision": 0.03125, "eval/stats.episode_len": 394.96875, "eval/stats.reach_goal": 0.03125, "eval/stats.return": 2007.0126953125, "eval/stats.truncated": 0.96875}
+NO_CLOSE_EXIT
+
+dynstopfinal:
+[EVAL-JSON] {"eval/stats.collision": 0.0, "eval/stats.episode_len": 400.0, "eval/stats.reach_goal": 0.125, "eval/stats.return": 2029.7965087890625, "eval/stats.truncated": 1.0}
+NO_CLOSE_EXIT
+```
+
+解释：
+
+- 三个 checkpoint 都能通过同一 Isaac eval-only 入口完成 rollout。
+- `dynstopfinal` 在这个 CPU matrix 里 collision 最低，为 `0.0`。
+- `dynstopfinal` 的 reach_goal 最高，为 `0.125`，但绝对值仍低，且多数 episode truncate。
+- `author` 的 return 最高，但 collision 非零；这说明 return、reach_goal、collision 不能单独看，需要结合作者训练目标理解。
+- 这一步支持把 `dynstopfinal` 继续作为当前自训练主候选，但还不能宣称正式复现成功。
+
+### 小规模 GPU Isaac eval 诊断
+
+目的：
+
+- 验证 GPU eval 路径是否已经干净，或是否仍存在 reset / Direct GPU API 问题。
+- 这不是 policy 指标测试，而是 eval 路径诊断。
+
+配置：
+
+```text
+device=cuda:0
+sim.device=cuda:0
+sim.use_gpu=True
+sim.use_gpu_pipeline=True
+env.num_envs=16
+env.num_obstacles=40
+env_dyn.num_obstacles=10
+env.max_episode_length=300
+checkpoint=dynstopfinal
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_gpu_dynstopfinal_diag_16_40_10_300_20260419
+```
+
+结果：
+
+```text
+[EVAL-JSON] {"eval/stats.collision": 0.0, "eval/stats.episode_len": 300.0, "eval/stats.reach_goal": 0.125, "eval/stats.return": 1550.3299560546875, "eval/stats.truncated": 1.0}
+NO_CLOSE_EXIT
+```
+
+同时日志里仍然出现：
+
+```text
+PhysX error: PxArticulationLink::setGlobalPose(): it is illegal to call this method if PxSceneFlag::eENABLE_DIRECT_GPU_API is enabled!
+```
+
+解释：
+
+- 小规模 GPU eval 这次没有崩，能输出指标和 `NO_CLOSE_EXIT`。
+- 但 Direct GPU API / `setGlobalPose` 报错仍然存在，说明 GPU eval/reset 路径没有真正修干净。
+- 不能把这个结果外推为 `1024 / 350 / 80` GPU eval 已经可用。
+- 当前应继续把两件事分开：
+  - policy 候选有效性：优先看 quick-demo 固定 evaluator、trace、CPU Isaac eval；
+  - GPU eval 工程问题：单独修 reset / pose update / Direct GPU API 路径。
 
 
 ## 2026-04-18 ROS2 辅助验证附录（压缩版）
