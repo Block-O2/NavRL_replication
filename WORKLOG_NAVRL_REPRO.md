@@ -35,7 +35,7 @@
 - `[done]` 收敛到 policy 复现主线：确认候选 policy、固定评估命令、输出可解释结果。
 - `[done]` 用固定 evaluator 做干净复跑，并把表格作为当前复现结论。
 - `[done]` 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
-- `[done]` 新增干净 Isaac eval-only 入口，并完成小规模 CPU eval、两档 CPU eval matrix、小规模 GPU eval 诊断。
+- `[done]` 新增干净 Isaac eval-only 入口，并完成三档 CPU eval matrix、小规模 GPU eval 诊断。
 - `[next]` 评估是否需要继续训练；如果继续，应基于 `dynstopfinal` 或同类 reward 设计，而不是原始 reward 盲目加长。
 - `[next]` 继续把 Isaac eval 扩大到更接近作者口径；GPU 路线必须先处理 reset / Direct GPU API 报错。
 - `[optional]` ROS2/真机部署只保留为附录和后续工作，不再压过 policy 训练与验证主线。
@@ -1909,6 +1909,70 @@ NO_CLOSE_EXIT
   - 动态障碍行为比早期自训练 baseline 明显改善；
   - 离“按作者口径完整复现”还有差距，尤其是更大规模、GPU eval、真实部署链路。
 
+### 目前最大一档 CPU Isaac eval matrix
+
+目的：
+
+- 继续逼近作者配置，在不触发 GPU reset 问题的前提下看 policy 结论是否稳定。
+- 这是目前跑过的最大 CPU Isaac eval，对复现判断权重高于 quick-demo 离线 evaluator。
+
+配置：
+
+```text
+device=cpu
+sim.device=cpu
+sim.use_gpu=False
+sim.use_gpu_pipeline=False
+env.num_envs=128
+env.num_obstacles=240
+env_dyn.num_obstacles=64
+env.max_episode_length=600
+```
+
+输出目录：
+
+```text
+isaac-training/runs/eval_clean_cpu_matrix_128_240_64_600_20260419
+```
+
+结果：
+
+```text
+author:
+[EVAL-JSON] {"eval/stats.collision": 0.109375, "eval/stats.episode_len": 579.90625, "eval/stats.reach_goal": 0.1484375, "eval/stats.return": 3035.903564453125, "eval/stats.truncated": 0.890625}
+NO_CLOSE_EXIT
+
+own1500:
+[EVAL-JSON] {"eval/stats.collision": 0.1171875, "eval/stats.episode_len": 581.3515625, "eval/stats.reach_goal": 0.1171875, "eval/stats.return": 2922.00390625, "eval/stats.truncated": 0.8828125}
+NO_CLOSE_EXIT
+
+dynstopfinal:
+[EVAL-JSON] {"eval/stats.collision": 0.125, "eval/stats.episode_len": 575.0078125, "eval/stats.reach_goal": 0.140625, "eval/stats.return": 2985.434814453125, "eval/stats.truncated": 0.875}
+NO_CLOSE_EXIT
+```
+
+解释：
+
+- 三个 checkpoint 都能在这一档 CPU Isaac eval 中完整跑完。
+- 环境规模上去后，collision 整体升高：
+  - author: `0.109375`
+  - own1500: `0.1171875`
+  - dynstopfinal: `0.125`
+- `author` 在这一档 reach_goal 和 return 都最高。
+- `dynstopfinal` 的 reach_goal / return 高于 `own1500`，但 collision 也高于 `own1500`。
+- 这推翻了一个过强的早期说法：不能再说 `dynstopfinal` 在 Isaac eval 上稳定低碰撞。
+- 更准确的当前判断：
+  - `dynstopfinal` 在 quick-demo / path-crossing 离线评估中显著改善动态横穿失败；
+  - 在小/中等 CPU Isaac eval 中也一度更低碰撞；
+  - 但放大到 `128 / 240 / 64 / 600` 后没有保持低碰撞优势；
+  - 因此它是有用候选和 ablation 证据，不是最终复现 policy。
+
+下一步判断：
+
+- 继续盲目加长 `dynstopfinal` 训练不够有根据。
+- 更有价值的是回到作者思路：确认作者原始训练是否依赖更长训练、更大 eval、外部 safety/gating，还是当前 reward ablation 引入了分布偏移。
+- 如果继续训练，应考虑更接近作者完整系统的目标，而不是只围绕 `dynamic_stop_penalty` 单点优化。
+
 ### 小规模 GPU Isaac eval 诊断
 
 目的：
@@ -2009,6 +2073,59 @@ NavigationEnv(cfg)
   - CPU eval 用来拿干净 policy 对照；
   - GPU eval 需要代码级处理 reset / pose 写入路径，或改成全 CPU eval；
   - 训练主路径继续使用跳过 step-0 eval 的 GPU noeval0 入口。
+
+补充诊断：
+
+- 也测试了更一致的组合：
+
+```text
+device=cpu
+sim.device=cuda:0
+sim.use_gpu=True
+sim.use_gpu_pipeline=False
+```
+
+- 输出目录：
+
+```text
+isaac-training/runs/eval_clean_cpu_tensor_gpu_physx_nopipeline_dynstopfinal_diag_16_40_10_300_20260419
+```
+
+- 结果仍然失败，错误相同：
+
+```text
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!
+```
+
+- 触发位置仍是：
+
+```text
+NavigationEnv(cfg)
+  -> self.drone.initialize()
+  -> self._view.post_reset()
+  -> XFormPrimView.post_reset()
+  -> self.set_world_poses(...)
+  -> omni_drones/views/__init__.py:273
+```
+
+- 当前结论：
+  - 两种 no-pipeline 配置都不能无代码绕行；
+  - 真要走这条路，需要最小代码 patch：在 OmniDrones view 写 pose 前，把 `positions/orientations` 移到 `poses.device`，然后再验证是否还会遇到后续 device mismatch；
+  - 这个 patch 可能影响共享底层 view，必须作为诊断分支小步测试，不能直接视为复现修复。
+
+临时 patch 诊断：
+
+- 尝试过在 `isaac-training/third_party/OmniDrones/omni_drones/views/__init__.py` 的 `set_world_poses()` 里做最小 device 对齐：
+  - 先把 `positions/orientations` 对齐到 `poses.device`；
+  - 再尝试把 `indices` 按原始输入 pose 的 device 传给 PhysX backend。
+- 这两个 patch 都没有形成可用修复：
+  - 第一个 patch 从 tensor device mismatch 推进到 PhysX backend index device 报错；
+  - 第二个 patch 仍然报 `Failed to set root link transforms in backend`，日志里还有 `Incompatible device of index tensor in function setRootTransforms: expected device -1, received device 0`。
+- 因为没有通过小规模 eval，已经撤回这两个临时 patch，避免污染稳定训练/CPU eval 路线。
+- 当前判断：
+  - no-pipeline 方向不是简单一两行 device cast 能解决；
+  - 若继续修 GPU eval，应单独开诊断分支研究 PhysX tensor backend 的 index/device 规则；
+  - 主线仍应先保留 CPU Isaac eval + GPU noeval0 training 的稳定组合。
 
 
 ## 2026-04-18 ROS2 辅助验证附录（压缩版）
