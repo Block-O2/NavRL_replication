@@ -36,6 +36,7 @@
 - `[done]` 用固定 evaluator 做干净复跑，并把表格作为当前复现结论。
 - `[done]` 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
 - `[done]` 新增干净 Isaac eval-only 入口，并完成四档 CPU eval matrix、小规模 GPU eval 诊断。
+- `[done]` 做作者 checkpoint vs `dynstopfinal` 的 ROS2-style / safe_action 端到端离线对照。
 - `[next]` 评估是否需要继续训练；如果继续，应基于 `dynstopfinal` 或同类 reward 设计，而不是原始 reward 盲目加长。
 - `[next]` 继续把 Isaac eval 扩大到更接近作者口径；GPU 路线必须先处理 reset / Direct GPU API 报错。
 - `[optional]` ROS2/真机部署只保留为附录和后续工作，不再压过 policy 训练与验证主线。
@@ -2166,6 +2167,116 @@ NO_CLOSE_EXIT
 - CPU 稳路线最多还可以尝试 `1024 / 350 / 80` 的 no-render eval，但耗时会更高。
 - 更有价值的下一步可能是把作者 checkpoint 和 `dynstopfinal` 接入同一 ROS2-style/safe_action 端到端链路，对比是否外部 safety/gating 缩小差距。
 - GPU eval 修复仍是正式 Isaac 口径的工程缺口。
+
+### ROS2-style / safe_action 作者系统口径对照
+
+目的：
+
+- 回到作者部署思路，而不是只看 Isaac eval 或 quick-demo 单点结果。
+- 用同一套离线 ROS2-style evaluator 比较：
+  - 作者 checkpoint；
+  - 当前自训练候选 `dynstopfinal`。
+- 重点看 gating 与 safe_action 是否解释两者差异。
+
+使用脚本：
+
+```text
+quick-demos/policy_ros2_style_compare.py
+```
+
+说明：
+
+- 这个脚本离线复刻 `ros2/navigation_runner/scripts/navigation.py` 的核心动作逻辑：
+  - 无障碍时直奔目标；
+  - 有障碍时调用 RL policy；
+  - 使用 ROS2 风格动态障碍 10 维编码；
+  - 可选启用 Python 版 safe_action 近似。
+- 这不是完整 ROS2 节点，也不是 Isaac eval。
+- 它适合回答：外部 gating / safe_action 是否改变作者 checkpoint 与自训练 policy 的相对表现。
+
+运行策略：
+
+- mixed 随机场景静态 raycast 很慢，100 seeds 不适合当前迭代；已中断一次耗时过长的 100-seed mixed 运行。
+- 正式记录采用：
+  - mixed：20 seeds；
+  - dynamic-only path/head-on：100 seeds。
+
+输出目录：
+
+```text
+quick-demos/eval_outputs/ros2_style_author_vs_dynstop_targeted_20260419
+```
+
+mixed，无 safe_action：
+
+```text
+author       reach=  2/20  static_col=17/20 dynamic_col=1/20 timeout=0/20  rl_ratio=1.00
+dynstopfinal reach= 16/20  static_col= 4/20 dynamic_col=0/20 timeout=0/20  rl_ratio=1.00
+```
+
+mixed，启用 safe_action：
+
+```text
+author       reach=  2/20  static_col=18/20 dynamic_col=0/20 timeout=0/20  safe_ratio=0.05
+dynstopfinal reach= 17/20  static_col= 3/20 dynamic_col=0/20 timeout=0/20  safe_ratio=0.06
+```
+
+dynamic path-crossing，无 safe_action，100 seeds：
+
+```text
+author       reach= 99/100 static_col=0/100 dynamic_col=1/100 timeout=0/100 min_dynamic=0.271
+dynstopfinal reach=100/100 static_col=0/100 dynamic_col=0/100 timeout=0/100 min_dynamic=0.672
+```
+
+dynamic path-crossing，启用 safe_action，100 seeds：
+
+```text
+author       reach=100/100 static_col=0/100 dynamic_col=0/100 timeout=0/100 min_dynamic=0.703
+dynstopfinal reach=100/100 static_col=0/100 dynamic_col=0/100 timeout=0/100 min_dynamic=0.856
+```
+
+dynamic head-on，无 safe_action，100 seeds：
+
+```text
+author       reach=100/100 static_col=0/100 dynamic_col=0/100 timeout=0/100 min_dynamic=0.757
+dynstopfinal reach= 98/100 static_col=0/100 dynamic_col=2/100 timeout=0/100 min_dynamic=0.275
+```
+
+dynamic head-on，启用 safe_action，100 seeds：
+
+```text
+author       reach=100/100 static_col=0/100 dynamic_col=0/100 timeout=0/100 min_dynamic=0.775
+dynstopfinal reach=100/100 static_col=0/100 dynamic_col=0/100 timeout=0/100 min_dynamic=0.999
+```
+
+解释：
+
+- ROS2-style 离线口径和 Isaac eval 口径结论明显不同：
+  - Isaac CPU eval 中作者 checkpoint 明显领先；
+  - ROS2-style mixed/path-crossing 简化场景中 `dynstopfinal` 更强。
+- `dynstopfinal` 的优势集中在横穿动态障碍和这个简化 mixed evaluator：
+  - path-crossing 无 safe_action 达到 `100/100`；
+  - mixed reach 明显高于作者 checkpoint。
+- 作者 checkpoint 在 head-on 动态障碍上更稳：
+  - 无 safe_action 时 `100/100` reach、0 collision；
+  - `dynstopfinal` 出现 `2/100` 动态碰撞。
+- safe_action 对 dynamic-only 场景有效：
+  - path-crossing 中消掉作者的 `1/100` 动态碰撞；
+  - head-on 中消掉 `dynstopfinal` 的 `2/100` 动态碰撞。
+- safe_action 在 mixed 场景中没有修掉大量静态碰撞，说明当前 Python 近似 safe_action / 简化 raycast 对静态障碍的保护能力有限，不能等价于真实 ROS2 节点。
+
+当前结论：
+
+- 作者系统很可能不是“policy 单独解决一切”，而是依赖 gating / safe_action / perception / 目标处理一起工作。
+- 但当前离线 ROS2-style evaluator 仍然是简化版，不能用它推翻 Isaac eval 中作者 checkpoint 更强的事实。
+- 更准确的复现判断应拆成两条：
+  - policy 局部动态横穿：`dynstopfinal` 有明确改进；
+  - 作者口径整体导航：作者 checkpoint 仍更可靠，尤其 Isaac eval 和 head-on 动态障碍。
+
+下一步：
+
+- 若继续推进真机前验证，应把这套对照从 Python 近似 safe_action 推到真实 ROS2 `safe_action_node`。
+- 如果继续训练，应针对 head-on 与 Isaac eval 碰撞问题，而不是只优化 path-crossing。
 
 ### 小规模 GPU Isaac eval 诊断
 
