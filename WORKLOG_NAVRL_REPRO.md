@@ -2716,6 +2716,7 @@ seed=0
 ```text
 runs/isaac_cpu_eval_pair_20260420/author_256_350_80_800.log
 runs/isaac_cpu_eval_pair_20260420/dynstopfinal_256_350_80_800.log
+runs/isaac_cpu_eval_pair_20260420/ownfinal_256_350_80_800.log
 ```
 
 启动注意：
@@ -2730,20 +2731,52 @@ runs/isaac_cpu_eval_pair_20260420/dynstopfinal_256_350_80_800.log
 | policy | collision | reach_goal | return | truncated | episode_len |
 |---|---:|---:|---:|---:|---:|
 | author | 0.1328125 | 0.21484375 | 3982.3125 | 0.86328125 | 762.35546875 |
+| ownfinal | 0.26171875 | 0.20703125 | 3628.06396484375 | 0.73828125 | 716.70703125 |
 | dynstopfinal | 0.1796875 | 0.1953125 | 3834.32666015625 | 0.8203125 | 743.2421875 |
 
 判断：
 
-- 这组 Isaac CPU 固定对照正常完成，两边都有 `[EVAL-JSON]` 和 `NO_CLOSE_EXIT`。
-- 在相同 Isaac 条件下，作者 checkpoint 仍优于 `dynstopfinal`：
+- 这组 Isaac CPU 固定对照正常完成，三个 policy 都有 `[EVAL-JSON]` 和 `NO_CLOSE_EXIT`。
+- 在相同 Isaac 条件下，作者 checkpoint 仍是最强：
   - collision 更低；
   - reach_goal 更高；
   - return 更高。
+- `dynstopfinal` 比无 ablation 的 `ownfinal` 更稳，主要体现在 collision 更低、return 更高。
 - 这说明 quick-demo evaluator 中 `dynstopfinal` 的好表现不能直接视为作者效果复现。
 - 当前最稳结论：
   - 自训练 policy 不是坏的；
   - 但还没有追平作者 checkpoint；
+  - `dynstopfinal` 是当前最好的自训练候选，但它来自 reward ablation，不是纯作者路线；
   - 下一步应查训练配置/目标差异，而不是继续扩展 ROS2 synthetic 工具。
+
+### 训练目标核对
+
+从日志和代码确认：
+
+- 无 ablation 50M run：
+  - `max_frame_num=50000000`
+  - `env.num_envs=1024`
+  - `env.num_obstacles=350`
+  - `env_dyn.num_obstacles=80`
+  - 没有额外 reward override。
+- `dynstopfinal` run：
+  - 从 `checkpoint_1500.pt` 继续；
+  - `max_frame_num=5000000`
+  - 明确加入：
+
+```text
+reward.dynamic_stop_penalty=1.0
+reward.dynamic_stop_distance=1.2
+reward.dynamic_stop_speed=0.2
+```
+
+- 当前 `env.py` 默认 reward 中：
+  - `collision_penalty=0.0`
+  - `success_reward=0.0`
+  - `terminate_on_reach_goal=False`
+  - `dynamic_stop_penalty=0.0`
+- 因此 `dynstopfinal` 更像“修某类动态障碍行为的 ablation policy”，不是严格作者原始目标复现。
+- 如果目标是按作者思路复现，下一轮主线应该回到 author-like 配置继续训练或核对作者 checkpoint 的训练长度/配置，而不是把 `dynamic_stop_penalty=1.0` 当最终方案。
 
 ## 下一步（更新）
 
