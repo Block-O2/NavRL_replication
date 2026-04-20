@@ -2623,9 +2623,69 @@ policies/own1500_20260417/checkpoint_1500.pt
 - 它来自定向 reward ablation，而不是盲目加长训练。
 - 下一步应该是固定 evaluator 的干净复跑和结果表格，而不是继续扩展 ROS2 synthetic 工具。
 
+## 2026-04-20 固定 quick-demo evaluator 复跑
+
+命令：
+
+```bash
+./quick-demos/run_repro_eval.sh
+```
+
+输出日志：
+
+```text
+quick-demos/eval_outputs/repro_eval_20260420_113625.log
+```
+
+### 结果摘要
+
+1. ROS2-style mixed，no safe_action，20 seeds：
+
+| policy | reach | static collision | dynamic collision | timeout |
+|---|---:|---:|---:|---:|
+| author | 2/20 | 17/20 | 1/20 | 0/20 |
+| ownfinal | 14/20 | 2/20 | 1/20 | 3/20 |
+| dynstopfinal | 15/20 | 3/20 | 0/20 | 2/20 |
+
+2. ROS2-style mixed，safe_action approximation，10 seeds：
+
+| policy | reach | static collision | dynamic collision | timeout |
+|---|---:|---:|---:|---:|
+| author | 1/10 | 9/10 | 0/10 | 0/10 |
+| ownfinal | 8/10 | 1/10 | 0/10 | 1/10 |
+| dynstopfinal | 9/10 | 0/10 | 0/10 | 1/10 |
+
+3. Dynamic path-crossing corridor，no safe_action，20 seeds：
+
+| policy | reach | static collision | dynamic collision | timeout |
+|---|---:|---:|---:|---:|
+| author | 20/20 | 0/20 | 0/20 | 0/20 |
+| ownfinal | 14/20 | 0/20 | 2/20 | 4/20 |
+| dynstopfinal | 20/20 | 0/20 | 0/20 | 0/20 |
+
+4. Dynamic path-crossing corridor，safe_action approximation，20 seeds：
+
+| policy | reach | static collision | dynamic collision | timeout |
+|---|---:|---:|---:|---:|
+| author | 20/20 | 0/20 | 0/20 | 0/20 |
+| ownfinal | 15/20 | 0/20 | 2/20 | 3/20 |
+| dynstopfinal | 20/20 | 0/20 | 0/20 | 0/20 |
+
+### 判断
+
+- 这次固定 quick-demo evaluator 复跑正常完成，没有 checkpoint 加载失败或运行异常。
+- 在这个简化 ROS2-style/offline 分布里，`dynstopfinal` 是当前自训练候选里最强的一个。
+- `dynstopfinal` 在 mixed 和 path-crossing 场景里都不差，说明它不是一个完全坏的 policy。
+- 但这个结果不能替代 Isaac eval：
+  - 之前更接近作者规模的 Isaac CPU eval 中，作者 checkpoint 仍明显强于 `dynstopfinal`；
+  - 因此当前不能宣布自训练 policy 已经复现作者效果。
+- 当前更稳的结论是：
+  - 自训练 policy 已经具备可见导航行为；
+  - 但还没有在作者任务分布/Isaac evaluator 上追平作者 checkpoint。
+
 ## 下一步
 
-1. 用 `quick-demos/run_repro_eval.sh` 或等价固定命令，重新跑作者 checkpoint、`own1500`、`dynstopfinal`。
-2. 记录每个 policy 的 reach / static collision / dynamic collision / timeout。
-3. 对 `dynstopfinal` 做少量失败样本 trace，确认它不是偶然变好。
-4. 如果结果稳定，再决定是否需要继续训练；如果不稳定，优先查 evaluator/训练 reward，而不是直接长训。
+1. 继续做 Isaac CPU 固定对照，而不是再扩展 quick-demo evaluator。
+2. 优先跑作者 checkpoint 与 `dynstopfinal` 的同规模对照，记录 `reach_goal / collision / return / truncated`。
+3. 如果 Isaac eval 仍显示作者明显更强，则下一步不要盲目长训，而是回到训练配置与 reward/termination 差异，确认自训练目标是否和作者原始设定一致。
+4. GPU eval/reset 的 Direct GPU API 问题暂时不作为主线阻塞；训练仍走 GPU noeval0，评估暂时用 CPU Isaac eval。
