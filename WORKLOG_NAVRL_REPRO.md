@@ -2689,3 +2689,73 @@ quick-demos/eval_outputs/repro_eval_20260420_113625.log
 2. 优先跑作者 checkpoint 与 `dynstopfinal` 的同规模对照，记录 `reach_goal / collision / return / truncated`。
 3. 如果 Isaac eval 仍显示作者明显更强，则下一步不要盲目长训，而是回到训练配置与 reward/termination 差异，确认自训练目标是否和作者原始设定一致。
 4. GPU eval/reset 的 Direct GPU API 问题暂时不作为主线阻塞；训练仍走 GPU noeval0，评估暂时用 CPU Isaac eval。
+
+## 2026-04-20 Isaac CPU 固定对照
+
+目的：
+
+- 用更接近作者训练/评估环境的 Isaac evaluator 对比作者 checkpoint 和当前最强自训练候选；
+- 避免只根据 quick-demo/ROS2-style 简化 evaluator 下结论；
+- 继续把“policy 有行为”和“复现作者效果”分开。
+
+运行条件：
+
+```text
+device=cpu
+sim.device=cpu
+env.num_envs=256
+env.num_obstacles=350
+env_dyn.num_obstacles=80
+env.max_episode_length=800
+eval_render=False
+seed=0
+```
+
+日志：
+
+```text
+runs/isaac_cpu_eval_pair_20260420/author_256_350_80_800.log
+runs/isaac_cpu_eval_pair_20260420/dynstopfinal_256_350_80_800.log
+```
+
+启动注意：
+
+- 第一次运行作者 eval 时失败在 `wandb` import 阶段：
+  - `urllib3.exceptions.ProxySchemeUnknown: Proxy URL had unsupported scheme socks5h`
+- 这不是 policy 或 Isaac rollout 失败；
+- 重跑时临时 `unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy` 后成功。
+
+结果：
+
+| policy | collision | reach_goal | return | truncated | episode_len |
+|---|---:|---:|---:|---:|---:|
+| author | 0.1328125 | 0.21484375 | 3982.3125 | 0.86328125 | 762.35546875 |
+| dynstopfinal | 0.1796875 | 0.1953125 | 3834.32666015625 | 0.8203125 | 743.2421875 |
+
+判断：
+
+- 这组 Isaac CPU 固定对照正常完成，两边都有 `[EVAL-JSON]` 和 `NO_CLOSE_EXIT`。
+- 在相同 Isaac 条件下，作者 checkpoint 仍优于 `dynstopfinal`：
+  - collision 更低；
+  - reach_goal 更高；
+  - return 更高。
+- 这说明 quick-demo evaluator 中 `dynstopfinal` 的好表现不能直接视为作者效果复现。
+- 当前最稳结论：
+  - 自训练 policy 不是坏的；
+  - 但还没有追平作者 checkpoint；
+  - 下一步应查训练配置/目标差异，而不是继续扩展 ROS2 synthetic 工具。
+
+## 下一步（更新）
+
+1. 回到训练配置与代码，核对作者原始训练目标：
+   - reward 是否仍是 author-like；
+   - `reach_goal` 是否只统计不奖励/不终止；
+   - dynamic_stop_penalty ablation 是否偏离作者方法；
+   - 自训练 policy 是否因为 reward patch 变成了另一个任务。
+2. 决定下一轮训练时，优先做“更接近作者配置的继续训练/从头训练”，而不是只根据 quick-demo 加强某个单项 reward。
+3. 如果要继续训练自有 policy，应固定保存：
+   - 训练入口；
+   - checkpoint；
+   - Isaac CPU eval 表；
+   - quick-demo sanity 表；
+   - 失败样本类型。
