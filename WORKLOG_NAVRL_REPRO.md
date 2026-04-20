@@ -2792,3 +2792,74 @@ reward.dynamic_stop_speed=0.2
    - Isaac CPU eval 表；
    - quick-demo sanity 表；
    - 失败样本类型。
+
+## 2026-04-20 启动 author-like 继续训练
+
+目的：
+
+- `dynstopfinal` 虽然是当前最好的自训练候选，但它来自 `dynamic_stop_penalty` ablation；
+- 如果目标是更接近作者复现，下一步应继续走无 ablation 的 author-like 配置；
+- 50M 自训练仍显著弱于作者 checkpoint，考虑到 README 默认训练量是 `12e8` frames，继续训练比继续改 quick-demo 更贴近复现主线。
+
+run：
+
+```text
+isaac-training/runs/navrl_1024_authorlike_continue100m_20260420
+```
+
+tmux：
+
+```text
+navrl_authorlike_100m_20260420
+```
+
+起点：
+
+```text
+isaac-training/runs/navrl_1024_50m_20260417_policy_retry1/ckpts/checkpoint_final.pt
+```
+
+训练配置：
+
+```text
+env.num_envs=1024
+env.num_obstacles=350
+env_dyn.num_obstacles=80
+max_frame_num=100000000
+eval_interval=999999
+save_interval=1000
+wandb.mode=disabled
+reward.* 保持默认 author-like，不加 dynamic_stop_penalty
+```
+
+输出：
+
+```text
+isaac-training/runs/navrl_1024_authorlike_continue100m_20260420/logs/train.log
+isaac-training/runs/navrl_1024_authorlike_continue100m_20260420/logs/metrics.jsonl
+isaac-training/runs/navrl_1024_authorlike_continue100m_20260420/ckpts/
+```
+
+启动检查：
+
+- tmux 会话存在；
+- 已保存 `checkpoint_0.pt`；
+- `metrics.jsonl` 已开始持续写入；
+- 监控时 metrics 已到 step 79；
+- 日志关键词筛查暂未命中：
+  - `Traceback`
+  - `AttributeError`
+  - `Segmentation fault`
+  - `CUDA error`
+  - `Exceeding maximum`
+  - `eENABLE_DIRECT_GPU_API`
+
+当前判断：
+
+- author-like 继续训练已经越过启动和首批采样阶段；
+- 这一步是为了获得更接近作者训练长度的自训练 checkpoint；
+- 训练完成后不要直接宣称复现成功，必须继续用 Isaac CPU 固定对照评估：
+  - author；
+  - old ownfinal；
+  - new author-like continue100m final；
+  - dynstopfinal。
