@@ -245,6 +245,73 @@ RViz 2D Nav Goal
   -> control loop
 ```
 
+### FCU 关键接口事实
+
+这些事实来自官方 `fcu_core_v2` 代码和资料，是 bridge 代码实现的依据。
+
+官方 FCU launch 会启动：
+
+```text
+fcu_bridge_001 ... fcu_bridge_006
+fcu_command
+fcu_mission
+RViz / robot_state_publisher 辅助节点
+```
+
+单机接入时，最相关的是 `fcu_bridge_001`：
+
+```text
+odom source -> fcu_bridge_001 -> /odom_global_001
+NavRL bridge -> /fcu_mission/mission_001 -> fcu_bridge_001 -> FCU
+```
+
+`fcu_bridge_001` 官方 launch 里常见 remap：
+
+```text
+~odometry_001    -> /vins_estimator/odometry
+~odom_global_001 -> odom_global_001
+~goal_001        -> /move_base_simple/goal
+~command         -> /fcu_command/command
+~mission_001     -> /fcu_mission/mission_001
+~motion_001      -> motion_001
+```
+
+`fcu_bridge_001.cpp` 里的 `missionHandler()` 只接受长度为 `11` 的 `Float32MultiArray`，然后转发给 `mav_send_target()`。
+
+官方参数里最需要认识的是：
+
+```text
+DRONE_IP
+USB_PORT
+BANDRATE
+channel
+offboard
+use_uwb
+set_goal
+simple_target
+odom_init_x
+odom_init_y
+odom_init_z
+```
+
+其中 `simple_target=true` 表示 FCU 侧把目标当作简单目标点，位置是主接口，速度/加速度不是主要接口。因此当前 NavRL bridge 默认：
+
+```text
+use_velocity_fields=false
+```
+
+也就是把 policy 输出速度转换成短时间 horizon 后的位置目标，而不是把 policy 速度直接当底层速度控制命令。
+
+如果以后要测试速度字段，只能先 dry-run：
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch \
+  dry_run:=true \
+  use_velocity_fields:=true
+```
+
+不要在没有 dry-run 验证的情况下直接对真机打开速度字段。
+
 ## 3. 启动前检查
 
 先确认 ROS 环境：
@@ -400,6 +467,27 @@ roslaunch navigation_runner navrl_fcu_bridge.launch \
 ```
 
 如果 checkpoint 路径错，节点会在加载 policy 时失败。
+
+bridge launch 的主要参数：
+
+```text
+dry_run                 default true
+device                  default cuda:0
+checkpoint_file         default navrl_checkpoint.pt
+odom_topic              default /odom_global_001
+goal_topic              default /move_base_simple/goal
+mission_topic           default /fcu_mission/mission_001
+dry_run_mission_topic   default /navrl_fcu_bridge/dry_run_mission_001
+use_safe_action         default true
+author_obstacle_gate    default true
+height_control          default false
+hold_current_z          default true
+use_velocity_fields     default false
+max_horizontal_speed    default 0.5
+max_vertical_speed      default 0.3
+command_horizon         default 0.2
+control_rate            default 10.0
+```
 
 ## 8. 打开 RViz 并标点
 

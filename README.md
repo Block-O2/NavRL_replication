@@ -60,13 +60,9 @@ Important files and directories:
 - `ros2/`
   - Official ROS2 deployment packages and synthetic preflight tools used during
     reproduction.
-- `docs/FCU_NAVRL_BRIDGE.md`
-  - Detailed notes on FCU topics, message fields, coordinate conversion, and
-    the dry-run checklist.
 - `docs/REAL_ROBOT_BRINGUP_GUIDE_ZH.md`
-  - Chinese step-by-step guide for opening the right repository, connecting FCU,
-    using RViz goals, checking dry-run output, and entering low-speed real-robot
-    tests.
+  - Main Chinese guide for repository setup, ROS workspace linking, FCU facts,
+    RViz goals, dry-run checks, and low-speed real-robot preparation.
 - `tools/link_ros1_catkin_ws.sh`
   - Creates deterministic symlinks from a catkin workspace to this repo's ROS1
     packages.
@@ -156,7 +152,7 @@ New files:
 ```text
 ros1/navigation_runner/scripts/navrl_fcu_bridge.py
 ros1/navigation_runner/launch/navrl_fcu_bridge.launch
-docs/FCU_NAVRL_BRIDGE.md
+docs/REAL_ROBOT_BRINGUP_GUIDE_ZH.md
 ```
 
 The bridge is intentionally thin:
