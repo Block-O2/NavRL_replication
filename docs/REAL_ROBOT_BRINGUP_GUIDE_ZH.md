@@ -157,6 +157,37 @@ rospack find fcu_core
 
 如果找不到 `fcu_core`，`roslaunch fcu_core fcu_core.launch` 一定会失败。
 
+### 本机旧目录处理
+
+本机曾经还有一个原作者 upstream clone：
+
+```text
+/home/hank/research/NavRL
+```
+
+它的 remote 是：
+
+```text
+https://github.com/Zhefan-Xu/NavRL.git
+```
+
+现在它不再是现场使用目录，也不再被 `/home/hank/catkin_ws/src` 的 ROS symlink 使用。后续开发、文档和真机 bring-up 都以：
+
+```text
+/home/hank/research/NavRL_replication
+```
+
+为准。
+
+如果确认不再需要旧 upstream clone，可以把旧目录重命名归档或删除。删除前至少确认：
+
+```bash
+git -C /home/hank/research/NavRL status -sb
+readlink -f /home/hank/catkin_ws/src/navigation_runner
+```
+
+`navigation_runner` 必须指向 `NavRL_replication`，而不是旧的 `NavRL`。
+
 ## 1. 代码框架怎么理解
 
 核心文件：
