@@ -69,6 +69,9 @@ Important files and directories:
 - `tools/check_ros1_workspace.sh`
   - Verifies that `rospack` resolves the ROS1 packages from this replication
     checkout and warns if `fcu_core` is missing.
+- `tools/source_navrl_ros1.sh`
+  - One-command shell setup for the local ROS1 simulator: activates the NavRL
+    venv, ROS Noetic, and `/home/hank/catkin_ws` overlay.
 
 ## Current Policy Status
 
@@ -200,10 +203,8 @@ Use dry-run first:
 
 ```bash
 cd /home/hank/research/NavRL_replication
-conda activate NavRL
-source /opt/ros/noetic/setup.bash
-source /home/hank/catkin_ws/devel/setup.bash
-roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true device:=cuda:0 checkpoint_file:=navrl_checkpoint.pt
+source tools/source_navrl_ros1.sh
+roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true device:=cpu checkpoint_file:=navrl_checkpoint.pt
 ```
 
 Dry-run output:

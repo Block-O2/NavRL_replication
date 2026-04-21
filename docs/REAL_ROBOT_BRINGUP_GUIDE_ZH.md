@@ -128,19 +128,26 @@ cd /home/hank/research/NavRL_replication
 
 ### 推荐 source 顺序
 
-每个要跑 ROS 的新终端都执行：
+本机现在没有 conda，也不需要为了 ROS1 仿真硬装 conda。当前已经配置好的环境是：
 
-```bash
-conda activate NavRL
-source /opt/ros/noetic/setup.bash
-source /home/hank/catkin_ws/devel/setup.bash
+```text
+NavRL policy venv: /home/hank/venvs/navrl-ros1
+ROS1 catkin workspace: /home/hank/catkin_ws
+源码仓库: /home/hank/research/NavRL_replication
 ```
 
-原因：
+每个要跑 NavRL ROS1 节点的新终端，都先执行一个统一入口：
 
-- `conda activate NavRL` 提供 NavRL policy 推理需要的 Python/Torch/Hydra 环境。
-- `/opt/ros/noetic/setup.bash` 提供 ROS Noetic 基础命令，如 `roscore`、`roslaunch`、`rostopic`。
-- `/home/hank/catkin_ws/devel/setup.bash` 把当前 catkin 工作空间里的 `navigation_runner`、`map_manager`、`onboard_detector` 等包加入 ROS 环境。
+```bash
+cd /home/hank/research/NavRL_replication
+source tools/source_navrl_ros1.sh
+```
+
+这个脚本内部做三件事：
+
+- 激活 `/home/hank/venvs/navrl-ros1`，提供 `torch`、`hydra`、`tensordict`、`torchrl` 等 policy 推理依赖。
+- source `/opt/ros/noetic/setup.bash`，提供 `roscore`、`roslaunch`、`rostopic` 等 ROS Noetic 基础命令。
+- source `/home/hank/catkin_ws/devel/setup.bash`，把当前 catkin 工作空间里的 `navigation_runner`、`map_manager`、`onboard_detector`、`uav_simulator` 加入 ROS 环境。
 
 如果这个终端只跑 `roscore`，可以只 source ROS：
 
@@ -155,9 +162,49 @@ roscore
 rospack find fcu_core
 ```
 
-如果找不到 `fcu_core`，`roslaunch fcu_core fcu_core.launch` 一定会失败。
+如果找不到 `fcu_core`，`roslaunch fcu_core fcu_core.launch` 一定会失败。`fcu_core` 只是真机 FCU 需要，本机 Gazebo 仿真不需要。
 
-### 固定启动命令速查
+### 本机 Gazebo 仿真启动命令
+
+仿真优先跑作者原始 ROS1 链路，不走 `navrl_fcu_bridge.py`。原因是 `navrl_fcu_bridge.py` 是给真机 FCU `mission_001` 做 dry-run/低速接入的，Gazebo 里的四旋翼实际听的是 `/CERLAB/quadcopter/cmd_vel` 和 setpoint。
+
+终端 1，ROS master：
+
+```bash
+source /opt/ros/noetic/setup.bash
+roscore
+```
+
+终端 2，Gazebo 四旋翼仿真：
+
+```bash
+cd /home/hank/research/NavRL_replication
+source tools/source_navrl_ros1.sh
+roslaunch uav_simulator start.launch
+```
+
+终端 3，地图、fake detector、safe action、RViz：
+
+```bash
+cd /home/hank/research/NavRL_replication
+source tools/source_navrl_ros1.sh
+roslaunch navigation_runner safety_and_perception_sim.launch \
+  use_px4:=false \
+  use_safety_shield:=true \
+  rviz:=true
+```
+
+终端 4，作者 ROS1 navigation node 加载 checkpoint 并输出仿真控制：
+
+```bash
+cd /home/hank/research/NavRL_replication
+source tools/source_navrl_ros1.sh
+rosrun navigation_runner navigation_node.py
+```
+
+RViz 里用 `2D Nav Goal` 标点。标点后目标会发布到 `/move_base_simple/goal`，`navigation_node.py` 订阅目标和 `/CERLAB/quadcopter/odom`，再向 Gazebo 发布 `/CERLAB/quadcopter/cmd_vel`。
+
+### 真机 FCU 启动命令速查
 
 旧的 `/home/hank/research/NavRL` 已经删除后，所有命令都统一使用：
 
@@ -176,8 +223,8 @@ roscore
 终端 2，启动 FCU：
 
 ```bash
-source /opt/ros/noetic/setup.bash
-source /home/hank/catkin_ws/devel/setup.bash
+cd /home/hank/research/NavRL_replication
+source tools/source_navrl_ros1.sh
 roslaunch fcu_core fcu_core.launch
 ```
 
@@ -191,9 +238,7 @@ rospack find fcu_core
 
 ```bash
 cd /home/hank/research/NavRL_replication
-conda activate NavRL
-source /opt/ros/noetic/setup.bash
-source /home/hank/catkin_ws/devel/setup.bash
+source tools/source_navrl_ros1.sh
 roslaunch navigation_runner safety_and_perception_real.launch \
   use_safety_shield:=true \
   rviz:=true
@@ -203,16 +248,14 @@ roslaunch navigation_runner safety_and_perception_real.launch \
 
 ```bash
 cd /home/hank/research/NavRL_replication
-conda activate NavRL
-source /opt/ros/noetic/setup.bash
-source /home/hank/catkin_ws/devel/setup.bash
+source tools/source_navrl_ros1.sh
 roslaunch navigation_runner navrl_fcu_bridge.launch \
   dry_run:=true \
   device:=cpu \
   checkpoint_file:=navrl_checkpoint.pt
 ```
 
-有 CUDA 时再把 `device:=cpu` 改成：
+有 CUDA 且确认当前 venv 的 PyTorch 支持 CUDA 时，再把 `device:=cpu` 改成：
 
 ```text
 device:=cuda:0
@@ -228,7 +271,6 @@ roslaunch navigation_runner navrl_fcu_bridge.launch \
   max_horizontal_speed:=0.2 \
   command_horizon:=0.2
 ```
-
 
 ### 本机旧目录处理
 
@@ -541,26 +583,18 @@ rosservice info /rl_navigation/get_safe_action
 
 ## 7. 启动 NavRL FCU bridge，先 dry-run
 
-GPU：
+默认 CPU dry-run：
 
 ```bash
-conda activate NavRL
-source /opt/ros/noetic/setup.bash
-source /home/hank/catkin_ws/devel/setup.bash
-roslaunch navigation_runner navrl_fcu_bridge.launch \
-  dry_run:=true \
-  device:=cuda:0 \
-  checkpoint_file:=navrl_checkpoint.pt
-```
-
-CPU/Jetson 调试：
-
-```bash
+cd /home/hank/research/NavRL_replication
+source tools/source_navrl_ros1.sh
 roslaunch navigation_runner navrl_fcu_bridge.launch \
   dry_run:=true \
   device:=cpu \
   checkpoint_file:=navrl_checkpoint.pt
 ```
+
+只有在确认当前 venv 的 PyTorch 支持 CUDA 后，才把 `device:=cpu` 改成 `device:=cuda:0`。
 
 启动后应看到类似日志：
 
