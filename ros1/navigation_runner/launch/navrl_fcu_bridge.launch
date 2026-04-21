@@ -1,0 +1,38 @@
+<launch>
+    <!-- Dry run is true by default so the bridge does not command FCU until explicitly enabled. -->
+    <arg name="dry_run" default="true" />
+    <arg name="device" default="cuda:0" />
+    <arg name="checkpoint_file" default="navrl_checkpoint.pt" />
+    <arg name="odom_topic" default="/odom_global_001" />
+    <arg name="goal_topic" default="/move_base_simple/goal" />
+    <arg name="mission_topic" default="/fcu_mission/mission_001" />
+    <arg name="dry_run_mission_topic" default="/navrl_fcu_bridge/dry_run_mission_001" />
+    <arg name="use_safe_action" default="true" />
+    <arg name="author_obstacle_gate" default="true" />
+    <arg name="height_control" default="false" />
+    <arg name="hold_current_z" default="true" />
+    <arg name="use_velocity_fields" default="false" />
+    <arg name="max_horizontal_speed" default="0.5" />
+    <arg name="max_vertical_speed" default="0.3" />
+    <arg name="command_horizon" default="0.2" />
+    <arg name="control_rate" default="10.0" />
+
+    <node pkg="navigation_runner" type="navrl_fcu_bridge.py" name="navrl_fcu_bridge" output="screen">
+        <param name="dry_run" value="$(arg dry_run)" />
+        <param name="device" value="$(arg device)" />
+        <param name="checkpoint_file" value="$(arg checkpoint_file)" />
+        <param name="odom_topic" value="$(arg odom_topic)" />
+        <param name="goal_topic" value="$(arg goal_topic)" />
+        <param name="mission_topic" value="$(arg mission_topic)" />
+        <param name="dry_run_mission_topic" value="$(arg dry_run_mission_topic)" />
+        <param name="use_safe_action" value="$(arg use_safe_action)" />
+        <param name="author_obstacle_gate" value="$(arg author_obstacle_gate)" />
+        <param name="height_control" value="$(arg height_control)" />
+        <param name="hold_current_z" value="$(arg hold_current_z)" />
+        <param name="use_velocity_fields" value="$(arg use_velocity_fields)" />
+        <param name="max_horizontal_speed" value="$(arg max_horizontal_speed)" />
+        <param name="max_vertical_speed" value="$(arg max_vertical_speed)" />
+        <param name="command_horizon" value="$(arg command_horizon)" />
+        <param name="control_rate" value="$(arg control_rate)" />
+    </node>
+</launch>

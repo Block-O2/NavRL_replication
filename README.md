@@ -1,263 +1,331 @@
-# NavRL: Learning Safe Flight in Dynamic Environments
-[![Python](https://img.shields.io/badge/python-3.10-4B8BBE.svg)](https://docs.python.org/3/whatsnew/3.10.html)
-[![ROS1](https://img.shields.io/badge/ROS1-Noetic-green.svg)](https://wiki.ros.org/noetic)
-[![ROS2](https://img.shields.io/badge/ROS2-Humble-F39C12.svg)](https://docs.ros.org/en/humble/index.html)
-[![IsaacSim](https://img.shields.io/badge/IsaacSim-NVIDIA-C0392B.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
-[![Linux platform](https://img.shields.io/badge/platform-Ubuntu-27AE60.svg)](https://releases.ubuntu.com/22.04/)
+# NavRL Replication and FCU Integration Notes
 
+This repository is a reproduction and deployment-preparation fork of the official
+NavRL project. It keeps the original NavRL code structure, adds reproduction
+logs/checkpoints/evaluators, and now includes a minimal ROS1 bridge for preparing
+NavRL policy output for the Fancinnov FCU interface.
 
+The goal of this repo is not to redesign NavRL. The current direction is:
 
-Welcome to the NavRL repository! This repository provides the implementation of the [NavRL](https://ieeexplore.ieee.org/document/10904341) framework, designed to enable robots to safely navigate dynamic environments using Reinforcement Learning. While the original paper focuses on UAV navigation, the NavRL can be extended to any robot that adopts a velocity-based control system.
+- Preserve the official NavRL policy observation/action semantics.
+- Treat the policy as a local navigation and obstacle-avoidance module, not a
+  low-level flight controller.
+- Keep the official checkpoint as the most important deployment baseline.
+- Keep self-trained checkpoints as controlled alternatives with clearly recorded
+  evidence and limitations.
+- Bridge to FCU through the official `mission_001` interface rather than inventing
+  a new low-level flight interface.
 
-<table>
-  <tr>
-    <td><img src="media/NavRL-demo1.gif" style="width: 100%;"></td>
-    <td><img src="media/NavRL-demo2.gif" style="width: 100%;"></td>
-    <td><img src="media/NavRL-demo3.gif" style="width: 100%;"></td>
-  </tr>
-</table>
+## Credits
 
+This work is based on:
 
-For additional details, please refer to the related paper available here:
+- Official NavRL repository: https://github.com/Zhefan-Xu/NavRL
+- NavRL paper: Zhefan Xu, Xinming Han, Haoyu Shen, Hanyu Jin, and Kenji Shimada,
+  "NavRL: Learning Safe Flight in Dynamic Environments", IEEE Robotics and
+  Automation Letters, 2025.
+- FCU core reference: https://github.com/fancinnov/fcu_core_v2 and
+  https://www.fancinnov.com/fcu_core_v2
 
-Zhefan Xu, Xinming Han, Haoyu Shen, Hanyu Jin, and Kenji Shimada, "NavRL: Learning Safe Flight in Dynamic Environments”, *IEEE Robotics and Automation Letters (RA-L)*, 2025. [\[IEEE Xplore\]](https://ieeexplore.ieee.org/document/10904341) [\[preprint\]](https://arxiv.org/pdf/2409.15634) [\[YouTube\]](https://youtu.be/EbeJW8-YlvI) [\[BiliBili\]](https://www.bilibili.com/video/BV1gsA9eTErz/?share_source=copy_web&vd_source=1333db331406abb1b5d4cece1e253427)
+Please cite the original NavRL paper if you use this project:
 
-
-## News
-* **2025-04-06:** We release easy-to-run Python scripts that allows users to quickly run demos.
-* **2025-02-23:** The GitHub code, video demos, and relavant papers for our NavRL framework are released. The authors will actively maintain and update this repo!
-
-## Table of Contents
- - [Training in NVIDIA Isaac Sim](#I-Training-in-NVIDIA-Isaac-Sim)
- - [Deployment Virtual Environment](#II-Deployment-Virtual-Environment)
- - [NavRL ROS1 Deployment](#III-NavRL-ROS1-Deployment)
- - [NavRL ROS2 Deployment](#IV-NavRL-ROS2-Deployment)
- - [Citation and Reference](#V-Citation-and-Reference)
- - [Acknowledgement](#VI-Acknowledgement)
-
-## NavRL Quick Demos in 3 Minutes
-We provide a pretrained model and easy-to-run Python scripts for quick demos of the NavRL framework.
-
-<table>
-  <tr>
-    <td><img src="media/simple-navigation.gif" style="width: 100%;"></td>
-    <td><img src="media/dynamic-navigation.gif" style="width: 100%;"></td>
-    <td><img src="media/multi-robot-navigation.gif" style="width: 100%;"></td>
-  </tr>
-</table>
-
-To get started, please follow the steps in [Deployment Virtual Environment](#II-Deployment-Virtual-Environment) to set up the Conda environment. Once the setup is complete, you can run the following three demos with the following commands:
-```
-conda activate NavRL
-cd NavRL/quick-demos
-
-# DEMO I: Navigating to a predefined goal point
-python simple-navigation.py
-
-# DEMO II: Navigating to dynamically/randomly assigned goal points
-python random-navigation.py
-
-# DEMO III: Multi-robot navigation
-python multi-robot-navigation.py
-```
-
-## I. Training in NVIDIA Isaac Sim
-This section provides the steps for training your own RL agent with the NavRL framework in Isaac Sim. **If you are not interested in training the agent yourself, feel free to skip this section and jump straight to the deployment section.**
-
-
-### Isaac Sim Installation
-This project was developed using **Isaac Sim version 2023.1.0-hotfix.1**, released in November 2023. **Please make sure you download and use this exact version, as using a different version may lead to errors due to version incompatibility.** Also, ensure that you have [conda](https://docs.anaconda.com/miniconda/) installed.
-
-If you have already downloaded Isaac Sim version 2023.1.0-hotfix.1, you can skip the following steps. Otherwise, please follow the instructions below to download the legacy version of Isaac Sim, as the official installation does not support legacy version downloads. 
-
-To download Isaac Sim version 2023.1.0-hotfix.1:
-
-a. First, follow the steps on [this link](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/install_container.html) to complete the Docker Container Setup. 
-
-b. Then, download the Isaac Sim to your docker container:
-```
-docker pull nvcr.io/nvidia/isaac-sim:2023.1.0-hotfix.1
-
-docker run --name isaac-sim --entrypoint bash -it --runtime=nvidia --gpus all -e "ACCEPT_EULA=Y" --rm --network=host \
-    -e "PRIVACY_CONSENT=Y" \
-    -v ~/docker/isaac-sim/cache/kit:/isaac-sim/kit/cache:rw \
-    -v ~/docker/isaac-sim/cache/ov:/root/.cache/ov:rw \
-    -v ~/docker/isaac-sim/cache/pip:/root/.cache/pip:rw \
-    -v ~/docker/isaac-sim/cache/glcache:/root/.cache/nvidia/GLCache:rw \
-    -v ~/docker/isaac-sim/cache/computecache:/root/.nv/ComputeCache:rw \
-    -v ~/docker/isaac-sim/logs:/root/.nvidia-omniverse/logs:rw \
-    -v ~/docker/isaac-sim/data:/root/.local/share/ov/data:rw \
-    -v ~/docker/isaac-sim/documents:/root/Documents:rw \
-    nvcr.io/nvidia/isaac-sim:2023.1.0-hotfix.1
-```
-c. Move the downloaded Isaac Sim from the docker container to your local machine:
-```
-bash docker ps # check your container ID in another terminal
-
-# Replace <id_container> with the output from the previous command
-docker cp <id_container>:isaac-sim/. /path/to/local/folder # absolute path
-```
-
-
-Isaac Sim version 2023.1.0-hotfix.1 is now installed on your local machine.
-
-### NavRL Training Setup
-To set up the NavRL framework, clone the repository and follow these steps (this process may take several minutes):
-```
-# Set the ISAACSIM_PATH environment variable
-echo 'export ISAACSIM_PATH="path/to/isaac_sim-2023.1.0-hotfix.1"' >> ~/.bashrc
-
-cd NavRL/isaac-training
-bash setup.sh
-```
-After the setup completes, you should have created a virtual environment named ```NavRL```.
-
-### Verify Installation and Run a Training Example
-Use the default parameter to run a training example with 2 robots to verify installation.
-
-```
-# Activate NavRL virtual environment
-conda activate NavRL
-
-# Run a training example with default settings
-python training/scripts/train.py
-```
-If the repo is installed correctly, you should be able to see the Isaac Sim window as shown below: 
-
-![isaac-training-window](https://github.com/user-attachments/assets/14a4d8a8-e607-434f-af9d-42d0d945e8d7)
-
-
-### Train your own RL agent
-The training environment settings and hyerparameters can be found in ```NavRL/isaac-training/training/cfg```.
-
-The following example demonstrates training with 1024 robots, 350 static obstacles, and 80 dynamic obstacles (an RTX 4090 is required). We recommend using [Wandb](https://wandb.ai/site/) to monitor your training and evaluation statistics.
-```
-python training/scripts/train.py headless=True env.num_envs=1024 env.num_obstacles=350 \
-env_dyn.num_obstacles=80 wandb.mode=online
-```
-After training for a sufficient amount of time, you should observe the robots learning to avoid collisions:
-
-https://github.com/user-attachments/assets/2294bd94-69b3-4ce8-8e91-0118cfae9bcd
-
-
-## II. Deployment Virtual Environment
-This section provides the minimum conda environment setup required to deploy ```NavRL``` (including running on a real robot). If you have already created the  ```NavRL``` conda environment during the [Isaac training step](#I-Training-in-NVIDIA-Isaac-Sim), you can skip this section. To create the conda environment, run the following commands:
-```
-cd NavRL/isaac-training
-bash setup_deployment.sh
-```
-Once the setup is complete, a conda environment named ```NavRL``` should be created. You can verify the installation by activating the environment:
-```
-conda activate NavRL
-```
-
-
-## III. NavRL ROS1 Deployment
-This section demonstrates an example of deploying NavRL with ROS1 and Gazebo using a quadcopter robot. Ensure that your system meets the following requirements:
-
-- Ubuntu 20.04 LTS
-- ROS1 Noetic
-
-First, install dependencies and copy the ```ros1``` folder from this repository into your catkin workspace.
-```
-sudo apt-get install ros-noetic-mavros*
-
-cp -r ros1 /path/to/catkin_ws/src
-catkin_make
-```
-Then, set the environment vairable for Gazebo models.
-```
-echo 'source /path/to/ros1/uav_simulator/gazeboSetup.bash' >> ~/.bashrc
-```
-Note that the environment variable should be set within the catkin_ws. For example, the correct ```~./.bashrc``` script should be  ```source ~/catkin_ws/src/ros1/uav_simulator/gazeboSetup.bash``` instead of ```source path/to/NavRL/ros1/uav_simulator/gazeboSetup.bash```).
-
-Finally, start the simulation and deploy NavRL navigation.
-```
-# Launch the gazebo simulator
-roslaunch uav_simulator start.launch
-
-# Start the perception and safety module
-roslaunch navigation_runner safety_and_perception_sim.launch
-
-# Run the navigation node
-conda activate NavRL
-rosrun navigation_runner navigation_node.py
-```
-A Gazebo window will display the environment while an RViz window presents the data. Use RViz's ```2D Nav Goal``` tool to set the navigation target, as shown in the video below (note: the default environment and settings might be different from the video):
-
-
-https://github.com/user-attachments/assets/b7cc7e2e-c01d-4e44-87e3-97271a3aaa0f
-
-
-To change the environment settings, review the launch file at ```ros1/uav_simulator/launch/start.launch```. The parameters for each module are located in ```ros1/navigation_runner/cfg/*.yaml``` configuration files.
-
-
-## IV. NavRL ROS2 Deployment
-This section demonstrates an example of deploying NavRL with ROS2 and Isaac Sim using a Unitree Go2 quadruped robot. Ensure that your system meets the following requirements:
-- Ubuntu 22.04 LTS
-- ROS2 Humble
-
-Before get started, please install the simulator based on [this link](https://github.com/Zhefan-Xu/isaac-go2-ros2).
-
-First, copy the ```ros2``` folder from this repository into your ros2 workspace.
-```
-cp -r ros2 /path/to/ros2_ws/src
-colcon build --symlink-install
-```
-Then, start the simulation and deploy NavRL navigation.
-```
-# Launch Isaac Go2 simulator
-conda activate isaaclab
-cd /path/to/isaac-go2-ros2
-python isaac-go2-ros2.py
-
-# Start the perception and safety module
-ros2 launch navigation_runner perception.launch.py
-ros2 launch navigation_runner safe_action.launch.py # optional
-
-# Turn on Rviz2 visualization
-ros2 launch navigation_runner rviz.launch.py
-
-# Run the navigation launch
-conda activate NavRL
-ros2 launch navigation_runner navigation.launch.py
-```
-An Isaac Sim window will display the environment while an RViz window presents the data. Use RViz's ```2D Nav Goal``` tool to set the navigation target. The navigation example is shown in the following video:
-
-
-https://github.com/user-attachments/assets/4787f503-d8a3-4d7b-9d17-7057b2cff1eb
-
-Note that if you would like to deploy in a real robot with ```ros2 foxy```, please switch to ```ros2-foxy``` branch.
-```
-git checkout ros2-foxy
-```
-
-
-## V. Citation and Reference
-If our work is useful to your research, please consider citing our paper.
-```
+```bibtex
 @ARTICLE{NavRL,
   author={Xu, Zhefan and Han, Xinming and Shen, Haoyu and Jin, Hanyu and Shimada, Kenji},
-  journal={IEEE Robotics and Automation Letters}, 
-  title={NavRL: Learning Safe Flight in Dynamic Environments}, 
+  journal={IEEE Robotics and Automation Letters},
+  title={NavRL: Learning Safe Flight in Dynamic Environments},
   year={2025},
   volume={10},
   number={4},
   pages={3668-3675},
-  keywords={Navigation;Robots;Collision avoidance;Training;Safety;Vehicle dynamics;Heuristic algorithms;Detectors;Autonomous aerial vehicles;Learning systems;Aerial systems: Perception and autonomy;reinforcement learning;collision avoidance},
-  doi={10.1109/LRA.2025.3546069}}
+  doi={10.1109/LRA.2025.3546069}
+}
 ```
 
-## VI. Acknowledgement
-The authors would like to express their sincere gratitude to Professor Kenji Shimada for his great support and all CERLAB UAV team members who contribute to the development of this research.
+## Repository Map
 
-The Isaac Sim training component of the NavRL framework is built upon [OmniDrones](https://github.com/btx0424/OmniDrones).
+Important files and directories:
 
+- `WORKLOG_NAVRL_REPRO.md`
+  - The main reproduction log. Read this first before changing training,
+    evaluation, or deployment code.
+- `policies/`
+  - Selected reproduction checkpoints and policy notes.
+- `quick-demos/`
+  - Official quick demos plus text evaluators and policy comparison tools.
+- `isaac-training/`
+  - Training and Isaac eval code, including clean no-close/no-eval helpers.
+- `ros1/`
+  - Official ROS1 deployment packages plus the new FCU bridge.
+- `ros2/`
+  - Official ROS2 deployment packages and synthetic preflight tools used during
+    reproduction.
+- `docs/FCU_NAVRL_BRIDGE.md`
+  - Detailed notes on FCU topics, message fields, coordinate conversion, and
+    the dry-run checklist.
 
+## Current Policy Status
 
+The policy conclusions below come from `WORKLOG_NAVRL_REPRO.md`. They should not
+be replaced by memory or a single new evaluator run.
 
+### Official Author Checkpoint
 
+Path:
 
+```text
+quick-demos/ckpts/navrl_checkpoint.pt
+ros1/navigation_runner/scripts/ckpts/navrl_checkpoint.pt
+ros2/navigation_runner/scripts/ckpts/navrl_checkpoint.pt
+```
 
+Role:
 
+- Primary baseline for "closest to author intent".
+- Stronger than the self-trained checkpoints in larger Isaac CPU evals that are
+  closer to the author's obstacle counts.
+- Still not a direct real-robot safety guarantee; it must be tested through the
+  full deployment chain.
 
+### Self-Trained Checkpoints
+
+Paths:
+
+```text
+policies/own1500_20260417/checkpoint_1500.pt
+policies/dynstopfinal_20260418/checkpoint_final.pt
+```
+
+Current interpretation:
+
+- `own1500` is the stable no-ablation self-trained baseline.
+- `dynstopfinal` is the strongest self-trained candidate in ROS2-style
+  offline/path-crossing tests, but it comes from a `dynamic_stop_penalty` reward
+  ablation.
+- `dynstopfinal` should not silently replace the author checkpoint for real
+  deployment preparation.
+- `ownfinal` is not the preferred deployment candidate because previous traces
+  showed it can slow down or stop in the path of crossing dynamic obstacles.
+
+## What Has Already Been Done
+
+From the work log:
+
+- 1024 / 350 / 80 GPU 50M training completed and checkpoints were preserved.
+- Quick-demo evaluators, ROS2-style offline evaluator, and path-crossing dynamic
+  scenarios were built.
+- A short 10M continuation from `checkpoint_1500.pt` was tested and did not
+  improve dynamic path-crossing.
+- Reward ablation was tested; `dynamic_stop_penalty` produced `dynstopfinal`.
+- Isaac CPU eval-only entry points were added and used to compare author vs
+  self-trained checkpoints.
+- ROS2 synthetic preflight verified that both author checkpoint and
+  `dynstopfinal` can be loaded by the real ROS2 navigation node and can produce
+  raw/safe/cmd velocities.
+
+Do not repeat these steps unless the work log is intentionally being updated
+with a new controlled experiment.
+
+## What Is Not Proven Yet
+
+These are important boundaries:
+
+- Training completion is not paper reproduction.
+- Quick-demo and ROS2-style offline results are not real-robot evidence.
+- Python safe-action approximations are not equivalent to the real C++ ROS
+  `safe_action_node`.
+- `dynstopfinal` is useful evidence, but not proof that the self-trained policy
+  has reached the official author's performance.
+- The FCU bridge in this repository is a dry-run-first deployment adapter, not a
+  flight-tested autonomy stack.
+
+## NavRL to FCU Bridge
+
+New files:
+
+```text
+ros1/navigation_runner/scripts/navrl_fcu_bridge.py
+ros1/navigation_runner/launch/navrl_fcu_bridge.launch
+docs/FCU_NAVRL_BRIDGE.md
+```
+
+The bridge is intentionally thin:
+
+- It subscribes to ROS odometry and goal topics.
+- It builds the same NavRL observation structure used by the official ROS
+  deployment code.
+- It loads a specified checkpoint.
+- It keeps the author-style obstacle gate:
+  - no obstacle in range: direct velocity toward goal;
+  - obstacle in range: use RL policy.
+- It optionally calls the real ROS1 C++ safe-action service:
+  - `/rl_navigation/get_safe_action`
+- It converts the final velocity into a short-horizon FCU `mission_001`
+  `Float32MultiArray`.
+- It defaults to `dry_run=true`, publishing to a debug topic instead of
+  commanding FCU.
+
+### FCU Output Message
+
+The FCU bridge expects `std_msgs/Float32MultiArray` with 11 elements:
+
+```text
+data[0]  yaw       rad
+data[1]  yaw_rate  rad/s
+data[2]  px        m
+data[3]  py        m
+data[4]  pz        m
+data[5]  vx        m/s
+data[6]  vy        m/s
+data[7]  vz        m/s
+data[8]  ax        m/s^2
+data[9]  ay        m/s^2
+data[10] az        m/s^2
+```
+
+The FCU code expects mission target position in FRU and attitude in FRD. The ROS
+side used here is FLU. Therefore the bridge explicitly flips `y`, `vy`, and
+`yaw` at the FCU boundary. This matches the official FCU code comments and
+implementation.
+
+### Dry-Run Start
+
+Use dry-run first:
+
+```bash
+conda activate NavRL
+source /opt/ros/noetic/setup.bash
+source /path/to/catkin_ws/devel/setup.bash
+roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true device:=cuda:0 checkpoint_file:=navrl_checkpoint.pt
+```
+
+Dry-run output:
+
+```text
+/navrl_fcu_bridge/dry_run_mission_001
+```
+
+Only after checking odom, goal, signs, mission fields, and emergency stop should
+you disable dry-run:
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=false checkpoint_file:=navrl_checkpoint.pt
+```
+
+For Jetson/CPU-only testing:
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true device:=cpu checkpoint_file:=navrl_checkpoint.pt
+```
+
+## Suggested Real-Robot Preparation Flow
+
+1. Read `WORKLOG_NAVRL_REPRO.md`.
+2. Build/source the ROS1 workspace containing this repository's `ros1` packages.
+3. Install and build official `fcu_core_v2` in the same or an overlay ROS1
+   workspace.
+4. Start FCU core using the official launch:
+
+```bash
+roslaunch fcu_core fcu_core.launch
+```
+
+5. Start NavRL perception/safety if those services are available:
+
+```bash
+roslaunch navigation_runner safety_and_perception_real.launch use_safety_shield:=true
+```
+
+6. Start the FCU bridge in dry-run mode:
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true checkpoint_file:=navrl_checkpoint.pt
+```
+
+7. Check topics:
+
+```bash
+rostopic echo /odom_global_001
+rostopic echo /move_base_simple/goal
+rostopic echo /navrl_fcu_bridge/dry_run_mission_001
+rostopic list | grep get_safe_action
+```
+
+8. Confirm signs:
+
+- Positive ROS `x` should command positive FCU mission `x`.
+- Positive ROS `y` should appear as negative FCU mission `y`.
+- Positive ROS yaw should appear as negative FCU mission yaw.
+
+9. Publish emergency stop test:
+
+```bash
+rostopic pub /navrl_fcu_bridge/emergency_stop std_msgs/Bool "data: true" -1
+```
+
+10. Only then consider `dry_run:=false`, with low speed limits first:
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch \
+  dry_run:=false \
+  checkpoint_file:=navrl_checkpoint.pt \
+  max_horizontal_speed:=0.2
+```
+
+## Recommended Checkpoint Choices for Deployment Preparation
+
+Start with the author checkpoint:
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch \
+  dry_run:=true \
+  checkpoint_file:=navrl_checkpoint.pt
+```
+
+Test `dynstopfinal` only as a controlled alternative:
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch \
+  dry_run:=true \
+  checkpoint_file:=$(pwd)/policies/dynstopfinal_20260418/checkpoint_final.pt
+```
+
+Keep `own1500` as the conservative no-ablation self-trained baseline:
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch \
+  dry_run:=true \
+  checkpoint_file:=$(pwd)/policies/own1500_20260417/checkpoint_1500.pt
+```
+
+## Validation Commands
+
+Syntax checks:
+
+```bash
+python3 -m py_compile ros1/navigation_runner/scripts/navrl_fcu_bridge.py
+bash -n quick-demos/run_repro_eval.sh
+```
+
+ROS launch parameter dump:
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /path/to/catkin_ws/devel/setup.bash
+roslaunch navigation_runner navrl_fcu_bridge.launch --dump-params
+```
+
+Fixed policy reproduction evaluator:
+
+```bash
+./quick-demos/run_repro_eval.sh
+```
+
+## Development Rules for This Repository
+
+- Read `WORKLOG_NAVRL_REPRO.md` before changing training/eval/deployment logic.
+- Do not restart long training unless there is a specific logged hypothesis.
+- Do not replace the author checkpoint as the default deployment baseline.
+- Do not change NavRL observation/action semantics casually.
+- Do not treat offline approximations as real-robot evidence.
+- Keep bridge/adaptation code thin and reversible.
