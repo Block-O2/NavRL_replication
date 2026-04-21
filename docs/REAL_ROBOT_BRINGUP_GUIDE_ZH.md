@@ -118,6 +118,14 @@ readlink -f /home/hank/catkin_ws/src/navigation_runner
 
 如果 `rospack find navigation_runner` 指到 `/home/hank/research/NavRL/ros1/navigation_runner`，说明又回到了原作者仓库，必须先修正 symlink。
 
+可以直接用仓库里的工具脚本修正：
+
+```bash
+cd /home/hank/research/NavRL_replication
+./tools/link_ros1_catkin_ws.sh /home/hank/catkin_ws
+./tools/check_ros1_workspace.sh /home/hank/catkin_ws
+```
+
 ### 推荐 source 顺序
 
 每个要跑 ROS 的新终端都执行：

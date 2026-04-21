@@ -67,6 +67,12 @@ Important files and directories:
   - Chinese step-by-step guide for opening the right repository, connecting FCU,
     using RViz goals, checking dry-run output, and entering low-speed real-robot
     tests.
+- `tools/link_ros1_catkin_ws.sh`
+  - Creates deterministic symlinks from a catkin workspace to this repo's ROS1
+    packages.
+- `tools/check_ros1_workspace.sh`
+  - Verifies that `rospack` resolves the ROS1 packages from this replication
+    checkout and warns if `fcu_core` is missing.
 
 ## Current Policy Status
 
@@ -225,28 +231,43 @@ roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true device:=cpu ch
 ## Suggested Real-Robot Preparation Flow
 
 1. Read `WORKLOG_NAVRL_REPRO.md`.
-2. Build/source the ROS1 workspace containing this repository's `ros1` packages.
-3. Install and build official `fcu_core_v2` in the same or an overlay ROS1
+2. Link this repository's ROS1 packages into the catkin workspace:
+
+```bash
+./tools/link_ros1_catkin_ws.sh /home/hank/catkin_ws
+```
+
+3. Build/source the ROS1 workspace and verify package resolution:
+
+```bash
+source /opt/ros/noetic/setup.bash
+cd /home/hank/catkin_ws
+catkin_make
+source /home/hank/catkin_ws/devel/setup.bash
+/home/hank/research/NavRL_replication/tools/check_ros1_workspace.sh /home/hank/catkin_ws
+```
+
+4. Install and build official `fcu_core_v2` in the same or an overlay ROS1
    workspace.
-4. Start FCU core using the official launch:
+5. Start FCU core using the official launch:
 
 ```bash
 roslaunch fcu_core fcu_core.launch
 ```
 
-5. Start NavRL perception/safety if those services are available:
+6. Start NavRL perception/safety if those services are available:
 
 ```bash
 roslaunch navigation_runner safety_and_perception_real.launch use_safety_shield:=true
 ```
 
-6. Start the FCU bridge in dry-run mode:
+7. Start the FCU bridge in dry-run mode:
 
 ```bash
 roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true checkpoint_file:=navrl_checkpoint.pt
 ```
 
-7. Check topics:
+8. Check topics:
 
 ```bash
 rostopic echo /odom_global_001
@@ -255,19 +276,19 @@ rostopic echo /navrl_fcu_bridge/dry_run_mission_001
 rostopic list | grep get_safe_action
 ```
 
-8. Confirm signs:
+9. Confirm signs:
 
 - Positive ROS `x` should command positive FCU mission `x`.
 - Positive ROS `y` should appear as negative FCU mission `y`.
 - Positive ROS yaw should appear as negative FCU mission yaw.
 
-9. Publish emergency stop test:
+10. Publish emergency stop test:
 
 ```bash
 rostopic pub /navrl_fcu_bridge/emergency_stop std_msgs/Bool "data: true" -1
 ```
 
-10. Only then consider `dry_run:=false`, with low speed limits first:
+11. Only then consider `dry_run:=false`, with low speed limits first:
 
 ```bash
 roslaunch navigation_runner navrl_fcu_bridge.launch \

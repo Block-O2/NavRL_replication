@@ -1,163 +1,100 @@
-# Byte-compiled / optimized / DLL files
+# Python caches
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# Virtual environment
+# Python packaging / virtual environments
 venv/
 env/
 *.egg-info/
 *.eggs/
-
-# Distribution / packaging
 build/
 dist/
 *.whl
 pip-wheel-metadata/
 
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
+# ROS / catkin / colcon build products
+devel/
+install/
+log/
+.catkin_tools/
+catkin_ws/
+ros1/build/
+ros1/devel/
+ros1/install/
+ros2/build/
+ros2/install/
+ros2/log/
 
-# Logs and databases
-*.log
-*.sqlite3
-*.db
-*.sqlite
-*.pkl
-*.h5
+# Experiment outputs and logs
+wandb/
+outputs/
+logs/
+runs/
+checkpoints/
+ckpts/
+models/
+videos/
+quick-demos/eval_outputs/
+isaac-training/outputs/
+isaac-training/training/scripts/outputs/
+isaac-training/training/scripts/wandb/
 
-# Test coverage reports
-htmlcov/
-*.cover
-.coverage
-*.coverage.*
-.cache
-nosetests.xml
-coverage.xml
+# Large model artifacts are ignored by default.
+# Curated checkpoint baselines that are already tracked remain versioned.
+*.pt
+*.pth
+*.ckpt
+*.onnx
 
-# Pytest cache
-.pytest_cache/
+# Hydra / W&B nested outputs
+*/outputs/*/.hydra/
+*/wandb/
+*/wandb/*/files/
+*/wandb/*/*.wandb
 
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# Isaac / third-party generated artifacts
+isaac-training/third_party/orbit/_isaac_sim
+isaac-training/third_party/rl/torchrl/version.py
+isaac-training/third_party/tensordict/tensordict/version.py
+isaac-training/third_party/warp/_build/
+isaac-training/nv_shadercache/
+**/nv_shadercache/
+*/tensordict/version.py
+*/warp/_build/
+*/warp/warp/native/*.o
 
-# VS Code
+# Compiled binaries / libraries
+*.so
+*.o
+
+# Local configuration
+.env
+.env.local
+.env.*.local
+docker-compose.override.yml
+
+# IDE / OS
 .vscode/
-
-# PyCharm
 .idea/
-*.iml
-
-# macOS
-.DS_Store
-
-# JetBrains IDEs
 *.idea/
 *.ipr
 *.iws
 *.iml
 out/
+.DS_Store
 
-# Ignore environment variables or configuration
-.env
-.env.local
-.env.*.local
-
-# Ignore temporary files
+# Temporary files
 *.swp
 *.swo
 *~
-
-# Ignore Docker-related files
-docker-compose.override.yml
-
-# Ignore compiled shared libraries
-*.so
-*.o
-
-# Ignore version files
-*/tensordict/version.py
-
-# Ignore Warp build artifacts
-*/warp/_build/
-*/warp/warp/native/*.o
-
-# Ignore Hydra logs and configuration
-*/outputs/*/.hydra/
-
-# Ignore Weights & Biases (wandb) logs
-*/wandb/
-*/wandb/*/files/
-*/wandb/*/*.wandb
-
-# Ignore Isaac Orbit symlink
-isaac-training/third_party/orbit/_isaac_sim
-
-# Ignore version files
-isaac-training/third_party/rl/torchrl/version.py
-isaac-training/third_party/tensordict/tensordict/version.py
-
-# Ignore Hydra logs and configs
-isaac-training/training/scripts/outputs/*/.hydra/
-
-# Ignore Weights & Biases (wandb) logs
-isaac-training/training/scripts/wandb/
-
-isaac-training/training/scripts/outputs/
-isaac-training/third_party/warp/_build/
-
-isaac-training/outputs/
-
-# model checkpoints / weights
-*.pt
-*.pth
-*.ckpt
-*.onnx
-
-# bulk training artifacts
-runs/
-checkpoints/
-ckpts/
-models/
-media/
-videos/
-
-# logs / outputs
-wandb/
-outputs/
-logs/
-
-# caches
-isaac-training/nv_shadercache/
-**/nv_shadercache/
-__pycache__/
-*.pyc
-
-# temp / backups
-*.bak
-*.tmp
-*~
-
-# model files
-*.pt
-*.pth
-*.ckpt
-*.onnx
-
-# outputs / logs
-wandb/
-outputs/
-logs/
-media/
-videos/
-quick-demos/eval_outputs/
-
-# local env / IDE
-.vscode/
-.idea/
-.DS_Store
-
 *.bak
 *.bak_*
+*.tmp
+
+# Legacy README demo GIFs should not be regenerated in this replication fork.
+media/
