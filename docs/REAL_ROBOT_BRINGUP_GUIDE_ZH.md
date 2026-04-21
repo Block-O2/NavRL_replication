@@ -64,6 +64,91 @@ File -> Open Folder -> /home/hank/research/NavRL_replication
 code /home/hank/research/NavRL_replication
 ```
 
+### 源码仓库和 ROS 工作空间的关系
+
+这里最容易乱。请把两个概念分开：
+
+```text
+源码仓库:
+  /home/hank/research/NavRL_replication
+
+ROS1 catkin 工作空间:
+  /home/hank/catkin_ws
+```
+
+`NavRL_replication` 是你用 IDE 打开、改代码、看文档、提交 Git 的地方。
+
+`catkin_ws` 是 ROS 真正用来 `rospack find`、`roslaunch`、`rosrun` 的工作空间。
+
+现在 `/home/hank/catkin_ws/src` 里应该有这些符号链接：
+
+```text
+/home/hank/catkin_ws/src/navigation_runner -> /home/hank/research/NavRL_replication/ros1/navigation_runner
+/home/hank/catkin_ws/src/map_manager       -> /home/hank/research/NavRL_replication/ros1/map_manager
+/home/hank/catkin_ws/src/onboard_detector  -> /home/hank/research/NavRL_replication/ros1/onboard_detector
+/home/hank/catkin_ws/src/uav_simulator     -> /home/hank/research/NavRL_replication/ros1/uav_simulator
+```
+
+用下面命令检查：
+
+```bash
+ls -la /home/hank/catkin_ws/src
+source /opt/ros/noetic/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
+rospack find navigation_runner
+```
+
+期望输出：
+
+```text
+/home/hank/catkin_ws/src/navigation_runner
+```
+
+再确认这个路径实际链接到复现仓库：
+
+```bash
+readlink -f /home/hank/catkin_ws/src/navigation_runner
+```
+
+期望输出：
+
+```text
+/home/hank/research/NavRL_replication/ros1/navigation_runner
+```
+
+如果 `rospack find navigation_runner` 指到 `/home/hank/research/NavRL/ros1/navigation_runner`，说明又回到了原作者仓库，必须先修正 symlink。
+
+### 推荐 source 顺序
+
+每个要跑 ROS 的新终端都执行：
+
+```bash
+conda activate NavRL
+source /opt/ros/noetic/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
+```
+
+原因：
+
+- `conda activate NavRL` 提供 NavRL policy 推理需要的 Python/Torch/Hydra 环境。
+- `/opt/ros/noetic/setup.bash` 提供 ROS Noetic 基础命令，如 `roscore`、`roslaunch`、`rostopic`。
+- `/home/hank/catkin_ws/devel/setup.bash` 把当前 catkin 工作空间里的 `navigation_runner`、`map_manager`、`onboard_detector` 等包加入 ROS 环境。
+
+如果这个终端只跑 `roscore`，可以只 source ROS：
+
+```bash
+source /opt/ros/noetic/setup.bash
+roscore
+```
+
+如果这个终端要跑 `fcu_core`，还必须确保 `fcu_core` 也在当前 catkin 工作空间或另一个已经 source 的 overlay 工作空间里：
+
+```bash
+rospack find fcu_core
+```
+
+如果找不到 `fcu_core`，`roslaunch fcu_core fcu_core.launch` 一定会失败。
+
 ## 1. 代码框架怎么理解
 
 核心文件：
