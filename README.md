@@ -63,6 +63,10 @@ Important files and directories:
 - `docs/FCU_NAVRL_BRIDGE.md`
   - Detailed notes on FCU topics, message fields, coordinate conversion, and
     the dry-run checklist.
+- `docs/REAL_ROBOT_BRINGUP_GUIDE_ZH.md`
+  - Chinese step-by-step guide for opening the right repository, connecting FCU,
+    using RViz goals, checking dry-run output, and entering low-speed real-robot
+    tests.
 
 ## Current Policy Status
 
