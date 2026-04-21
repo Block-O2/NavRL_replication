@@ -179,7 +179,59 @@ git remote -v
 ls ros1/navigation_runner/scripts/ckpts/navrl_checkpoint.pt
 ```
 
-## 4. 连接真机并启动 FCU
+## 4. 官方起飞前安全检查
+
+这一节不是 NavRL 的算法要求，而是 Fancinnov/FanciSwarm 真机起飞前检查。不要跳过。
+
+官方资料里明确提到的电池事项：
+
+- 不使用无人机时，确保电池与飞控扩展板彻底断开。
+- 电池充满后及时从充电器拔下，避免过充/过放。
+- 低电量报警时，应及时充电或更换电池。
+- 严禁使用鼓包、漏液、包装破损的电池。
+- 锂电池长时间不用时，电压至少维护到 `7.6V-7.7V`。
+- 严禁将锂电池放电到 `6.4V` 以下，过放会造成不可逆损伤。
+
+我目前没有在官方 FCU 资料里找到“允许起飞的最低电压必须是 X.X V”的明确阈值，所以不要在代码或流程里硬编一个起飞电压阈值。现场应按电池规格、App/FCU 显示、电池报警和实验室安全规范决定是否允许起飞。
+
+FCU ROS 工程启动成功后，`fcu_bridge_001` 会打印类似信息：
+
+```text
+fcu_bridge 001 connect succeed
+voltage: ... V
+current: ... A
+sat: ...
+gnss: ...
+```
+
+起飞前必须看这些信息：
+
+- `fcu_bridge 001 connect succeed` 已出现。
+- 电压/电流在终端中正常打印。
+- 没有低电压报警声。
+- 定位状态满足当前场景要求。
+- RViz 中轨迹显示正确。
+
+官方资料里明确提到的环境/姿态检查：
+
+- 无人机放置在水平面。
+- 用户面朝机尾。
+- 无人机前、后、左、右 `2m` 范围内空旷，无墙壁、无杂物。
+- 室内飞行应确认地面纹理清晰，避免纯色、过暗、过亮、强反光地面。
+- 室外搭载高精度 GNSS 模组时，关注 GNSS 定位状态；官方快速入门里写到 GNSS 定位状态为 `2` 时表示信号良好。
+- 如果是没有高精度 GNSS、依赖室内定位/光流/测距的机型，按官方说明在启动提示音结束后，将飞机垂直地面拿起一次，超过 `1m` 后放下，用于确认激光测距/定位链路正常。
+
+ROS 侧进入 NavRL 前，还要做这几个检查：
+
+```bash
+rostopic echo /odom_global_001
+rostopic echo -n 1 /odom_global_001/header
+rostopic info /fcu_mission/mission_001
+```
+
+拿起飞机在安全状态下小范围移动一圈，通过 RViz 检查轨迹方向是否正确。只有轨迹方向、坐标轴、`y/yaw` 符号都确认过，才进入 NavRL dry-run。
+
+## 5. 连接真机并启动 FCU
 
 先启动 FCU core：
 
@@ -201,7 +253,7 @@ rostopic info /fcu_mission/mission_001
 
 你需要看到 FCU 相关节点在订阅 `/fcu_mission/mission_001`。如果没有订阅者，不要进入 `dry_run=false`。
 
-## 5. 启动感知与安全节点
+## 6. 启动感知与安全节点
 
 如果现场要跑作者式感知/安全链路：
 
@@ -218,7 +270,7 @@ rosservice info /rl_navigation/get_safe_action
 
 如果 `/rl_navigation/get_safe_action` 不存在，bridge 仍然可以跑，但这只是 bring-up 兼容模式，不能当成完整作者部署链路。
 
-## 6. 启动 NavRL FCU bridge，先 dry-run
+## 7. 启动 NavRL FCU bridge，先 dry-run
 
 GPU：
 
@@ -256,7 +308,7 @@ roslaunch navigation_runner navrl_fcu_bridge.launch \
 
 如果 checkpoint 路径错，节点会在加载 policy 时失败。
 
-## 7. 打开 RViz 并标点
+## 8. 打开 RViz 并标点
 
 如果没有自动打开 RViz：
 
@@ -314,7 +366,7 @@ hold_current_z=true
 
 所以 RViz 目标主要控制水平 `x/y`，高度保持当前 odom 高度。
 
-## 8. Dry-run 检查 mission 输出
+## 9. Dry-run 检查 mission 输出
 
 查看 dry-run 输出：
 
@@ -356,7 +408,7 @@ ROS/NavRL yaw -> FCU mission -yaw
 
 也就是说，如果你在 RViz 点正 y 方向，dry-run mission 的 `data[3]` 应该往负方向变化。
 
-## 9. 无障碍时它怎么飞
+## 10. 无障碍时它怎么飞
 
 如果 raycast 和动态障碍都认为附近没有障碍：
 
@@ -377,7 +429,7 @@ odom=(...) goal=(...) dist=... obstacle=False policy=(...) final=(...)
 
 这里即使实际选择的是直飞目标，代码仍会计算 policy velocity 用于日志对照。
 
-## 10. 有障碍时它怎么避障
+## 11. 有障碍时它怎么避障
 
 如果静态 raycast 或动态障碍服务报告附近有障碍：
 
@@ -400,7 +452,7 @@ odom=(...) goal=(...) dist=... obstacle=True policy=(...) final=(...)
 
 如果限幅触发，日志 reason 会带 `clamped`。
 
-## 11. Emergency stop 测试
+## 12. Emergency stop 测试
 
 dry-run 阶段先测：
 
@@ -416,10 +468,14 @@ rostopic pub /navrl_fcu_bridge/emergency_stop std_msgs/Bool "data: false" -1
 
 注意：这个 emergency stop 是 bridge 层停止继续发新运动目标，不等价于物理急停。现场必须保留遥控器/FCU/电源级接管手段。
 
-## 12. 真发前门槛
+## 13. 真发前门槛
 
 只有全部满足才考虑 `dry_run=false`：
 
+- 电池状态确认过，没有低电压报警。
+- FCU 终端正常打印电压/电流。
+- 飞机周围 `2m` 空旷。
+- 室内地面纹理或室外 GNSS 状态满足官方要求。
 - `/odom_global_001` 稳定更新。
 - `/move_base_simple/goal` 能收到 RViz 标点。
 - `/navrl_fcu_bridge/dry_run_mission_001` 维度为 11。
@@ -452,7 +508,7 @@ roslaunch navigation_runner navrl_fcu_bridge.launch \
   command_horizon:=0.2
 ```
 
-## 13. 常用检查命令
+## 14. 常用检查命令
 
 ```bash
 rostopic echo /odom_global_001
@@ -475,7 +531,7 @@ rostopic echo /move_base_simple/goal
 
 如果没有 odom，它会等待 FCU odom。
 
-## 14. checkpoint 怎么选
+## 15. checkpoint 怎么选
 
 默认作者 checkpoint：
 
@@ -504,7 +560,7 @@ checkpoint_file:=/absolute/path/to/policies/own1500_20260417/checkpoint_1500.pt
 再考虑自训练 checkpoint 对照
 ```
 
-## 15. 不能做的事
+## 16. 不能做的事
 
 不要同时运行：
 
@@ -528,7 +584,7 @@ max_horizontal_speed=0.5 或更高
 
 不要把 `dynstopfinal` 的离线优势当成默认部署理由。
 
-## 16. 一句话流程
+## 17. 一句话流程
 
 ```text
 FCU 发布 /odom_global_001；
@@ -543,3 +599,12 @@ dry-run 时发布 /navrl_fcu_bridge/dry_run_mission_001；
 真发时发布 /fcu_mission/mission_001；
 FCU 负责底层执行。
 ```
+
+## 18. 资料来源
+
+本指南的 FCU/电池/起飞前检查内容来自以下资料和代码：
+
+- Fancinnov FanciSwarm 快速入门/支持页面。
+- Fancinnov Mcontroller v7 / fcu_core_v2 ROS 说明页面。
+- `fcu_core_v2/src/fcu_bridge_001.cpp` 中的 heartbeat 电压、电流、卫星和 GNSS 打印逻辑。
+- `fcu_core_v2/src/fcu_mission.cpp` 中的 `mission_001` 字段与 y/yaw 取反逻辑。
