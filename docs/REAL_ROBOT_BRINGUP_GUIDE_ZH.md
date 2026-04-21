@@ -18,7 +18,7 @@
 https://github.com/Block-O2/NavRL_replication
 ```
 
-不要继续在原作者 upstream 仓库里改：
+不要继续在原作者 upstream 仓库里改；本机旧的 `/home/hank/research/NavRL` 已经删除：
 
 ```text
 https://github.com/Zhefan-Xu/NavRL
@@ -116,7 +116,7 @@ readlink -f /home/hank/catkin_ws/src/navigation_runner
 /home/hank/research/NavRL_replication/ros1/navigation_runner
 ```
 
-如果 `rospack find navigation_runner` 指到 `/home/hank/research/NavRL/ros1/navigation_runner`，说明又回到了原作者仓库，必须先修正 symlink。
+如果 `rospack find navigation_runner` 指到 `/home/hank/research/NavRL/ros1/navigation_runner`，说明又回到了原作者仓库或旧 symlink，必须先修正 symlink。
 
 可以直接用仓库里的工具脚本修正：
 
@@ -157,6 +157,79 @@ rospack find fcu_core
 
 如果找不到 `fcu_core`，`roslaunch fcu_core fcu_core.launch` 一定会失败。
 
+### 固定启动命令速查
+
+旧的 `/home/hank/research/NavRL` 已经删除后，所有命令都统一使用：
+
+```text
+源码目录: /home/hank/research/NavRL_replication
+ROS 工作空间: /home/hank/catkin_ws
+```
+
+终端 1，只跑 ROS master：
+
+```bash
+source /opt/ros/noetic/setup.bash
+roscore
+```
+
+终端 2，启动 FCU：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
+roslaunch fcu_core fcu_core.launch
+```
+
+如果 `roslaunch fcu_core ...` 失败，先检查：
+
+```bash
+rospack find fcu_core
+```
+
+终端 3，启动感知和 safety：
+
+```bash
+cd /home/hank/research/NavRL_replication
+conda activate NavRL
+source /opt/ros/noetic/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
+roslaunch navigation_runner safety_and_perception_real.launch \
+  use_safety_shield:=true \
+  rviz:=true
+```
+
+终端 4，启动 NavRL bridge，先 dry-run：
+
+```bash
+cd /home/hank/research/NavRL_replication
+conda activate NavRL
+source /opt/ros/noetic/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
+roslaunch navigation_runner navrl_fcu_bridge.launch \
+  dry_run:=true \
+  device:=cpu \
+  checkpoint_file:=navrl_checkpoint.pt
+```
+
+有 CUDA 时再把 `device:=cpu` 改成：
+
+```text
+device:=cuda:0
+```
+
+低速真发只在 dry-run 检查全部通过后执行：
+
+```bash
+roslaunch navigation_runner navrl_fcu_bridge.launch \
+  dry_run:=false \
+  device:=cpu \
+  checkpoint_file:=navrl_checkpoint.pt \
+  max_horizontal_speed:=0.2 \
+  command_horizon:=0.2
+```
+
+
 ### 本机旧目录处理
 
 本机曾经还有一个原作者 upstream clone：
@@ -171,7 +244,7 @@ rospack find fcu_core
 https://github.com/Zhefan-Xu/NavRL.git
 ```
 
-现在它不再是现场使用目录，也不再被 `/home/hank/catkin_ws/src` 的 ROS symlink 使用。后续开发、文档和真机 bring-up 都以：
+现在这个旧目录已经删除，也不再被 `/home/hank/catkin_ws/src` 的 ROS symlink 使用。后续开发、文档和真机 bring-up 都以：
 
 ```text
 /home/hank/research/NavRL_replication
@@ -179,14 +252,19 @@ https://github.com/Zhefan-Xu/NavRL.git
 
 为准。
 
-如果确认不再需要旧 upstream clone，可以把旧目录重命名归档或删除。删除前至少确认：
+如果以后需要重新参考原作者 upstream，另行 clone 到一个明确的归档/参考目录，不要再占用 `/home/hank/research/NavRL` 这个容易混淆的名字。
 
-```bash
-git -C /home/hank/research/NavRL status -sb
-readlink -f /home/hank/catkin_ws/src/navigation_runner
+当前本机只应存在：
+
+```text
+/home/hank/research/NavRL_replication
 ```
 
-`navigation_runner` 必须指向 `NavRL_replication`，而不是旧的 `NavRL`。
+`navigation_runner` 必须指向 `NavRL_replication`，而不是旧的 `NavRL`：
+
+```bash
+readlink -f /home/hank/catkin_ws/src/navigation_runner
+```
 
 ## 1. 代码框架怎么理解
 
@@ -349,7 +427,7 @@ roslaunch navigation_runner navrl_fcu_bridge.launch \
 
 ```bash
 source /opt/ros/noetic/setup.bash
-source /path/to/catkin_ws/devel/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
 ```
 
 确认当前工作区包含 `navigation_runner`：
@@ -468,7 +546,7 @@ GPU：
 ```bash
 conda activate NavRL
 source /opt/ros/noetic/setup.bash
-source /path/to/catkin_ws/devel/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
 roslaunch navigation_runner navrl_fcu_bridge.launch \
   dry_run:=true \
   device:=cuda:0 \

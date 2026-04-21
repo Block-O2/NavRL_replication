@@ -199,9 +199,10 @@ implementation.
 Use dry-run first:
 
 ```bash
+cd /home/hank/research/NavRL_replication
 conda activate NavRL
 source /opt/ros/noetic/setup.bash
-source /path/to/catkin_ws/devel/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
 roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=true device:=cuda:0 checkpoint_file:=navrl_checkpoint.pt
 ```
 
@@ -215,7 +216,7 @@ Only after checking odom, goal, signs, mission fields, and emergency stop should
 you disable dry-run:
 
 ```bash
-roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=false checkpoint_file:=navrl_checkpoint.pt
+roslaunch navigation_runner navrl_fcu_bridge.launch dry_run:=false device:=cpu checkpoint_file:=navrl_checkpoint.pt max_horizontal_speed:=0.2
 ```
 
 For Jetson/CPU-only testing:
@@ -332,7 +333,7 @@ ROS launch parameter dump:
 
 ```bash
 source /opt/ros/noetic/setup.bash
-source /path/to/catkin_ws/devel/setup.bash
+source /home/hank/catkin_ws/devel/setup.bash
 roslaunch navigation_runner navrl_fcu_bridge.launch --dump-params
 ```
 
